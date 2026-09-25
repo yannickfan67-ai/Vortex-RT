@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <optional>
@@ -85,9 +86,23 @@ public:
     [[nodiscard]] std::optional<std::string> metadata_string(const std::string& key) const;
     [[nodiscard]] std::optional<std::uint64_t> metadata_u64(const std::string& key) const;
 
+    [[nodiscard]] std::optional<std::uint64_t> tensor_byte_size(
+        const GgufTensorInfo& tensor) const;
+
+    [[nodiscard]] std::vector<std::byte> read_tensor_bytes(
+        const GgufTensorInfo& tensor) const;
+
+    [[nodiscard]] std::vector<float> read_f32_tensor(
+        const GgufTensorInfo& tensor) const;
+
+    [[nodiscard]] std::vector<float> read_q8_0_row(
+        const GgufTensorInfo& tensor,
+        std::uint64_t row) const;
+
     void validate() const;
 
 private:
+    std::filesystem::path path_;
     std::uint32_t version_ = 0;
     std::uint64_t file_size_ = 0;
     std::uint64_t data_offset_ = 0;
