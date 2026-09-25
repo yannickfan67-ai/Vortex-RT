@@ -210,6 +210,10 @@ add_executable(vortexrt-gelu-test src/gelu_test_main.cpp)
 target_link_libraries(vortexrt-gelu-test PRIVATE vortexrt)
 add_dependencies(vortexrt-gelu-test vortexrt_shaders)
 
+add_executable(vortexrt-ffn-test src/ffn_test_main.cpp)
+target_link_libraries(vortexrt-ffn-test PRIVATE vortexrt)
+add_dependencies(vortexrt-ffn-test vortexrt_shaders)
+
 add_executable(vortexrt-gguf-info src/gguf_main.cpp)
 target_link_libraries(vortexrt-gguf-info PRIVATE vortexrt)
 
@@ -226,4 +230,5 @@ if(BUILD_TESTING)
     )
     add_test(NAME vortexrt-q8-matvec COMMAND vortexrt-q8-test)
     add_test(NAME vortexrt-gelu-mul COMMAND vortexrt-gelu-test)
+    add_test(NAME vortexrt-fused-ffn COMMAND vortexrt-ffn-test)
 endif()
