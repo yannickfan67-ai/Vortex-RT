@@ -76,13 +76,15 @@ Gemma3Model::Gemma3Model(
     const std::string& q8_matvec_u8_spirv,
     const std::string& argmax_spirv,
     const std::string& q8_matvec_32_spirv,
-    const std::string& q8_matvec_u8_32_spirv)
+    const std::string& q8_matvec_u8_32_spirv,
+    const std::string& gelu_mul_spirv)
     : gguf_(gguf_path),
       context_(context),
       q8_pipeline_(
           context,
           q8_matvec_spirv,
-          q8_matvec_u8_spirv) {
+          q8_matvec_u8_spirv,
+          gelu_mul_spirv) {
 
     fuse_projections_ =
         context_.capabilities().device_type !=
@@ -1288,60 +1290,146 @@ Gemma3SingleTokenResult Gemma3Model::decode_token(
                         layer,
                         "ffn_norm.weight"));
 
-            std::vector<float> gate;
-            std::vector<float> up;
+            std::vector<float> ffn_output;
 
-            if (fuse_projections_) {
-                auto gate_up =
-                    run_q8_pair(
-                        std::array<std::string, 2>{
+            if (fuse_projections_ &&
+                q8_pipeline_.ffn_available()) {
+
+                const auto gate_name =
+                    layer_tensor(
+                        layer,
+                        "ffn_gate.weight");
+                const auto up_name =
+                    layer_tensor(
+                        layer,
+                        "ffn_up.weight");
+                const auto down_name =
+                    layer_tensor(
+                        layer,
+                        "ffn_down.weight");
+
+                const auto* gate_tensor =
+                    require_tensor(
+                        gguf_,
+                        gate_name);
+                const auto* up_tensor =
+                    require_tensor(
+                        gguf_,
+                        up_name);
+                const auto* down_tensor =
+                    require_tensor(
+                        gguf_,
+                        down_name);
+
+                const auto valid_q8_matrix =
+                    [](const GgufTensorInfo* tensor,
+                       std::uint64_t input_dim,
+                       std::uint64_t output_dim) {
+                        return
+                            tensor != nullptr &&
+                            tensor->type == 8 &&
+                            tensor->dimensions.size() == 2 &&
+                            tensor->dimensions[0] == input_dim &&
+                            tensor->dimensions[1] == output_dim &&
+                            tensor->offset <=
+                                std::numeric_limits<
+                                    std::uint32_t>::max();
+                    };
+
+                if (!valid_q8_matrix(
+                        gate_tensor,
+                        config_.embedding_length,
+                        config_.feed_forward_length) ||
+                    !valid_q8_matrix(
+                        up_tensor,
+                        config_.embedding_length,
+                        config_.feed_forward_length) ||
+                    !valid_q8_matrix(
+                        down_tensor,
+                        config_.feed_forward_length,
+                        config_.embedding_length)) {
+                    throw std::runtime_error(
+                        "Gemma 3 fused FFN tensor layout mismatch");
+                }
+
+                ffn_output.resize(
+                    config_.embedding_length);
+
+                q8_pipeline_.run_staged_ffn(
+                    *weights_arena_,
+                    *activation_input_,
+                    *activation_output_,
+                    *staging_input_,
+                    *staging_output_,
+                    ffn_input.data(),
+                    ffn_input.size() * sizeof(float),
+                    ffn_output.data(),
+                    ffn_output.size() * sizeof(float),
+                    static_cast<std::uint32_t>(
+                        gate_tensor->offset),
+                    static_cast<std::uint32_t>(
+                        up_tensor->offset),
+                    static_cast<std::uint32_t>(
+                        down_tensor->offset),
+                    config_.embedding_length,
+                    config_.feed_forward_length,
+                    config_.embedding_length);
+            } else {
+                std::vector<float> gate;
+                std::vector<float> up;
+
+                if (fuse_projections_) {
+                    auto gate_up =
+                        run_q8_pair(
+                            std::array<std::string, 2>{
+                                layer_tensor(
+                                    layer,
+                                    "ffn_gate.weight"),
+                                layer_tensor(
+                                    layer,
+                                    "ffn_up.weight"),
+                            },
+                            ffn_input);
+
+                    gate = std::move(gate_up[0]);
+                    up = std::move(gate_up[1]);
+                } else {
+                    gate =
+                        run_q8_matvec(
                             layer_tensor(
                                 layer,
                                 "ffn_gate.weight"),
+                            ffn_input);
+                    up =
+                        run_q8_matvec(
                             layer_tensor(
                                 layer,
                                 "ffn_up.weight"),
-                        },
-                        ffn_input);
+                            ffn_input);
+                }
 
-                gate = std::move(gate_up[0]);
-                up = std::move(gate_up[1]);
-            } else {
-                gate =
+                if (gate.size() != up.size() ||
+                    gate.size() !=
+                        config_.feed_forward_length) {
+                    throw std::runtime_error(
+                        "Gemma 3 FFN projection width mismatch");
+                }
+
+                for (std::size_t i = 0;
+                     i < gate.size();
+                     ++i) {
+                    gate[i] =
+                        gelu_tanh(gate[i]) *
+                        up[i];
+                }
+
+                ffn_output =
                     run_q8_matvec(
                         layer_tensor(
                             layer,
-                            "ffn_gate.weight"),
-                        ffn_input);
-                up =
-                    run_q8_matvec(
-                        layer_tensor(
-                            layer,
-                            "ffn_up.weight"),
-                        ffn_input);
+                            "ffn_down.weight"),
+                        gate);
             }
-
-            if (gate.size() != up.size() ||
-                gate.size() !=
-                    config_.feed_forward_length) {
-                throw std::runtime_error(
-                    "Gemma 3 FFN projection width mismatch");
-            }
-
-            for (std::size_t i = 0;
-                 i < gate.size();
-                 ++i) {
-                gate[i] =
-                    gelu_tanh(gate[i]) *
-                    up[i];
-            }
-
-            auto ffn_output =
-                run_q8_matvec(
-                    layer_tensor(
-                        layer,
-                        "ffn_down.weight"),
-                    gate);
 
             ffn_output =
                 rms_norm(
