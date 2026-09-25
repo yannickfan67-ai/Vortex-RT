@@ -634,6 +634,26 @@ void Q8MatVecPipeline::clear_triplet_command_cache() noexcept {
     triplet_command_cache_.clear();
 }
 
+void Q8MatVecPipeline::clear_ffn_command_cache() noexcept {
+    if (command_pool_ == VK_NULL_HANDLE) {
+        ffn_command_cache_.clear();
+        return;
+    }
+
+    for (auto& entry : ffn_command_cache_) {
+        auto command = entry.second;
+        if (command != VK_NULL_HANDLE) {
+            vkFreeCommandBuffers(
+                context_.device(),
+                command_pool_,
+                1,
+                &command);
+        }
+    }
+
+    ffn_command_cache_.clear();
+}
+
 VkCommandBuffer Q8MatVecPipeline::get_or_record_command(
     const DispatchKey& key) {
 
@@ -1641,7 +1661,7 @@ void Q8MatVecPipeline::run_staged_ffn(
         ffn_bound_ffn_dim_ = ffn_dim;
         ffn_bound_output_dim_ = output_dim;
         ffn_descriptors_valid_ = true;
-        ffn_command_cache_.clear();
+        clear_ffn_command_cache();
     }
 
     const FfnDispatchKey key{
