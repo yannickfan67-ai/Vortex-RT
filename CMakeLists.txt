@@ -26,6 +26,7 @@ set(Q8_MATVEC_U8_SPV "${VORTEXRT_SHADER_DIR}/q8_matvec_u8.comp.spv")
 set(Q8_MATVEC_32_SPV "${VORTEXRT_SHADER_DIR}/q8_matvec_32.comp.spv")
 set(Q8_MATVEC_U8_32_SPV "${VORTEXRT_SHADER_DIR}/q8_matvec_u8_32.comp.spv")
 set(ARGMAX_SPV "${VORTEXRT_SHADER_DIR}/argmax.comp.spv")
+set(GELU_MUL_SPV "${VORTEXRT_SHADER_DIR}/gelu_mul.comp.spv")
 
 add_custom_command(
     OUTPUT "${VECTOR_ADD_SPV}"
@@ -72,6 +73,17 @@ add_custom_command(
 )
 
 add_custom_command(
+    OUTPUT "${GELU_MUL_SPV}"
+    COMMAND "${CMAKE_COMMAND}" -E make_directory "${VORTEXRT_SHADER_DIR}"
+    COMMAND "${GLSLC_EXECUTABLE}"
+            -O
+            "${CMAKE_CURRENT_SOURCE_DIR}/shaders/gelu_mul.comp"
+            -o "${GELU_MUL_SPV}"
+    DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/gelu_mul.comp"
+    VERBATIM
+)
+
+add_custom_command(
     OUTPUT "${Q8_MATVEC_32_SPV}"
     COMMAND "${CMAKE_COMMAND}" -E make_directory "${VORTEXRT_SHADER_DIR}"
     COMMAND "${GLSLC_EXECUTABLE}"
@@ -102,6 +114,7 @@ add_custom_target(
         "${Q8_MATVEC_32_SPV}"
         "${Q8_MATVEC_U8_32_SPV}"
         "${ARGMAX_SPV}"
+        "${GELU_MUL_SPV}"
 )
 
 configure_file(
