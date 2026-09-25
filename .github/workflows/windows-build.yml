@@ -1,0 +1,74 @@
+name: windows-build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  windows-msvc:
+    runs-on: windows-2025
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Vulkan SDK
+        shell: powershell
+        run: |
+          choco install vulkan-sdk -y --no-progress
+          Import-Module "$env:ChocolateyInstall\helpers\chocolateyProfile.psm1"
+          refreshenv
+
+          $sdk = [Environment]::GetEnvironmentVariable("VULKAN_SDK", "Machine")
+          if (-not $sdk) {
+            $sdk = [Environment]::GetEnvironmentVariable("VULKAN_SDK", "User")
+          }
+          if (-not $sdk) {
+            throw "VULKAN_SDK was not set by the Vulkan SDK installer"
+          }
+
+          "VULKAN_SDK=$sdk" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "$sdk\Bin" | Out-File -FilePath $env:GITHUB_PATH -Append
+
+          & "$sdk\Bin\glslc.exe" --version
+
+      - name: Configure
+        shell: powershell
+        run: |
+          cmake -S . -B build -A x64 -DBUILD_TESTING=ON
+
+      - name: Build Release
+        shell: powershell
+        run: |
+          cmake --build build --config Release --parallel 2
+
+      - name: Verify binaries
+        shell: powershell
+        run: |
+          $expected = @(
+            "vortexrt-info.exe",
+            "vortexrt-bench.exe",
+            "vortexrt-q8-test.exe",
+            "vortexrt-gelu-test.exe",
+            "vortexrt-ffn-test.exe",
+            "vortexrt-gguf-info.exe",
+            "vortexrt-gemma.exe"
+          )
+
+          foreach ($name in $expected) {
+            $path = Join-Path "build\Release" $name
+            if (-not (Test-Path $path)) {
+              throw "Missing Windows build artifact: $path"
+            }
+            Write-Host "Built $path"
+          }
+
+      - name: Upload Windows binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: vortexrt-windows-x64
+          path: |
+            build/Release/*.exe
+            build/shaders/*.spv
+          if-no-files-found: error
