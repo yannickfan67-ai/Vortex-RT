@@ -172,6 +172,16 @@ int main() {
             vortexrt::build_config::q8_matvec_32_spv,
             vortexrt::build_config::q8_matvec_u8_32_spv);
 
+        vortexrt::Q8MatVecPipeline pipeline16(
+            context,
+            vortexrt::build_config::q8_matvec_16_spv,
+            vortexrt::build_config::q8_matvec_u8_16_spv);
+
+        vortexrt::Q8MatVecPipeline pipeline8(
+            context,
+            vortexrt::build_config::q8_matvec_8_spv,
+            vortexrt::build_config::q8_matvec_u8_8_spv);
+
         pipeline.run(
             weights,
             gpu_input,
@@ -212,6 +222,38 @@ int main() {
                 std::fabs(actual32[i] - reference[i]));
         }
 
+        auto validate_variant =
+            [&](vortexrt::Q8MatVecPipeline& candidate) {
+                candidate.run(
+                    weights,
+                    gpu_input,
+                    gpu_output,
+                    0,
+                    kInput,
+                    kOutput);
+                std::vector<float> values(kOutput);
+                gpu_output.download(
+                    values.data(),
+                    values.size() * sizeof(float));
+                float error = 0.0f;
+                for (std::uint32_t i = 0;
+                     i < kOutput;
+                     ++i) {
+                    error =
+                        std::max(
+                            error,
+                            std::fabs(
+                                values[i] -
+                                reference[i]));
+                }
+                return error;
+            };
+
+        const float max_error16 =
+            validate_variant(pipeline16);
+        const float max_error8 =
+            validate_variant(pipeline8);
+
         constexpr std::uint32_t kTimingRepetitions = 20;
 
         const auto time_pipeline =
@@ -240,6 +282,10 @@ int main() {
             time_pipeline(pipeline);
         const double avg32_ms =
             time_pipeline(pipeline32);
+        const double avg16_ms =
+            time_pipeline(pipeline16);
+        const double avg8_ms =
+            time_pipeline(pipeline8);
 
         std::cout << "Vortex-RT Q8_0 matvec\n";
         std::cout << "  GPU: " << context.capabilities().name << "\n";
@@ -249,13 +295,23 @@ int main() {
         std::cout << "  max abs error: " << max_error << "\n";
         std::cout << "  32-lane max abs error: "
                   << max_error32 << "\n";
+        std::cout << "  16-lane max abs error: "
+                  << max_error16 << "\n";
+        std::cout << "  8-lane max abs error: "
+                  << max_error8 << "\n";
         std::cout << "  64-lane avg: "
                   << avg64_ms << " ms\n";
         std::cout << "  32-lane avg: "
                   << avg32_ms << " ms\n";
+        std::cout << "  16-lane avg: "
+                  << avg16_ms << " ms\n";
+        std::cout << "  8-lane avg: "
+                  << avg8_ms << " ms\n";
 
         if (max_error > 2e-3f ||
-            max_error32 > 2e-3f) {
+            max_error32 > 2e-3f ||
+            max_error16 > 2e-3f ||
+            max_error8 > 2e-3f) {
             throw std::runtime_error(
                 "Q8_0 Vulkan matvec mismatch");
         }
