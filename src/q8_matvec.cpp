@@ -2,7 +2,9 @@
 
 #include <algorithm>
 #include <array>
+#include <cstdint>
 #include <fstream>
+#include <limits>
 #include <stdexcept>
 #include <vector>
 
@@ -40,6 +42,31 @@ struct Push {
     std::uint32_t out_dim;
     std::uint32_t groups_x;
 };
+
+constexpr std::uint64_t kQ8BlockElements = 32;
+constexpr std::uint64_t kQ8BlockBytes = 34;
+
+std::uint64_t checked_mul(
+    std::uint64_t a,
+    std::uint64_t b,
+    const char* what) {
+
+    if (a != 0 && b > std::numeric_limits<std::uint64_t>::max() / a) {
+        throw std::runtime_error(what);
+    }
+    return a * b;
+}
+
+std::uint64_t checked_add(
+    std::uint64_t a,
+    std::uint64_t b,
+    const char* what) {
+
+    if (b > std::numeric_limits<std::uint64_t>::max() - a) {
+        throw std::runtime_error(what);
+    }
+    return a + b;
+}
 
 } // namespace
 
@@ -164,6 +191,7 @@ Q8MatVecPipeline::Q8MatVecPipeline(
             "vkCreateFence failed");
     } catch (...) {
         vkDestroyShaderModule(context.device(), shader, nullptr);
+        cleanup();
         throw;
     }
 
@@ -171,24 +199,37 @@ Q8MatVecPipeline::Q8MatVecPipeline(
 }
 
 Q8MatVecPipeline::~Q8MatVecPipeline() {
+    cleanup();
+}
+
+void Q8MatVecPipeline::cleanup() noexcept {
     const auto device = context_.device();
+
     if (fence_ != VK_NULL_HANDLE) {
         vkDestroyFence(device, fence_, nullptr);
+        fence_ = VK_NULL_HANDLE;
     }
     if (command_pool_ != VK_NULL_HANDLE) {
         vkDestroyCommandPool(device, command_pool_, nullptr);
+        command_pool_ = VK_NULL_HANDLE;
+        command_buffer_ = VK_NULL_HANDLE;
     }
     if (descriptor_pool_ != VK_NULL_HANDLE) {
         vkDestroyDescriptorPool(device, descriptor_pool_, nullptr);
+        descriptor_pool_ = VK_NULL_HANDLE;
+        descriptor_set_ = VK_NULL_HANDLE;
     }
     if (pipeline_ != VK_NULL_HANDLE) {
         vkDestroyPipeline(device, pipeline_, nullptr);
+        pipeline_ = VK_NULL_HANDLE;
     }
     if (pipeline_layout_ != VK_NULL_HANDLE) {
         vkDestroyPipelineLayout(device, pipeline_layout_, nullptr);
+        pipeline_layout_ = VK_NULL_HANDLE;
     }
     if (set_layout_ != VK_NULL_HANDLE) {
         vkDestroyDescriptorSetLayout(device, set_layout_, nullptr);
+        set_layout_ = VK_NULL_HANDLE;
     }
 }
 
@@ -201,31 +242,100 @@ void Q8MatVecPipeline::run(
     std::uint32_t output_dim) {
 
     if (input_dim == 0 || output_dim == 0) {
-        throw std::runtime_error("Q8MatVecPipeline dimensions must be non-zero");
+        throw std::runtime_error(
+            "Q8MatVecPipeline dimensions must be non-zero");
+    }
+    if ((input_dim % kQ8BlockElements) != 0) {
+        throw std::runtime_error(
+            "Q8MatVecPipeline input_dim must be divisible by 32");
+    }
+    if ((weight_byte_offset & 3u) != 0u) {
+        throw std::runtime_error(
+            "Q8MatVecPipeline weight byte offset must be 4-byte aligned");
     }
 
-    std::array<VkDescriptorBufferInfo, 3> infos{{
-        {weights.handle(), 0, weights.size()},
-        {input.handle(), 0, input.size()},
-        {output.handle(), 0, output.size()},
-    }};
+    const std::uint64_t blocks =
+        static_cast<std::uint64_t>(input_dim) / kQ8BlockElements;
+    const std::uint64_t row_bytes =
+        checked_mul(
+            blocks,
+            kQ8BlockBytes,
+            "Q8MatVecPipeline row byte size overflow");
+    const std::uint64_t matrix_bytes =
+        checked_mul(
+            static_cast<std::uint64_t>(output_dim),
+            row_bytes,
+            "Q8MatVecPipeline matrix byte size overflow");
+    const std::uint64_t required_weight_bytes =
+        checked_add(
+            weight_byte_offset,
+            matrix_bytes,
+            "Q8MatVecPipeline weight range overflow");
 
-    std::array<VkWriteDescriptorSet, 3> writes{};
-    for (std::uint32_t i = 0; i < writes.size(); ++i) {
-        writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        writes[i].dstSet = descriptor_set_;
-        writes[i].dstBinding = i;
-        writes[i].descriptorCount = 1;
-        writes[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        writes[i].pBufferInfo = &infos[i];
+    const std::uint64_t required_input_bytes =
+        checked_mul(
+            input_dim,
+            sizeof(float),
+            "Q8MatVecPipeline input byte size overflow");
+    const std::uint64_t required_output_bytes =
+        checked_mul(
+            output_dim,
+            sizeof(float),
+            "Q8MatVecPipeline output byte size overflow");
+
+    if (required_weight_bytes > weights.size()) {
+        throw std::runtime_error(
+            "Q8MatVecPipeline weight buffer is too small");
+    }
+    if (required_input_bytes > input.size()) {
+        throw std::runtime_error(
+            "Q8MatVecPipeline input buffer is too small");
+    }
+    if (required_output_bytes > output.size()) {
+        throw std::runtime_error(
+            "Q8MatVecPipeline output buffer is too small");
     }
 
-    vkUpdateDescriptorSets(
-        context_.device(),
-        static_cast<std::uint32_t>(writes.size()),
-        writes.data(),
-        0,
-        nullptr);
+    const bool descriptor_changed =
+        bound_weights_ != weights.handle() ||
+        bound_input_ != input.handle() ||
+        bound_output_ != output.handle() ||
+        bound_weights_size_ != weights.size() ||
+        bound_input_size_ != input.size() ||
+        bound_output_size_ != output.size();
+
+    if (descriptor_changed) {
+        std::array<VkDescriptorBufferInfo, 3> infos{{
+            {weights.handle(), 0, weights.size()},
+            {input.handle(), 0, input.size()},
+            {output.handle(), 0, output.size()},
+        }};
+
+        std::array<VkWriteDescriptorSet, 3> writes{};
+        for (std::uint32_t i = 0; i < writes.size(); ++i) {
+            writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            writes[i].dstSet = descriptor_set_;
+            writes[i].dstBinding = i;
+            writes[i].descriptorCount = 1;
+            writes[i].descriptorType =
+                VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            writes[i].pBufferInfo = &infos[i];
+        }
+
+        vkUpdateDescriptorSets(
+            context_.device(),
+            static_cast<std::uint32_t>(writes.size()),
+            writes.data(),
+            0,
+            nullptr);
+
+        bound_weights_ = weights.handle();
+        bound_input_ = input.handle();
+        bound_output_ = output.handle();
+        bound_weights_size_ = weights.size();
+        bound_input_size_ = input.size();
+        bound_output_size_ = output.size();
+    }
 
     check(
         vkResetFences(context_.device(), 1, &fence_),
@@ -256,9 +366,18 @@ void Q8MatVecPipeline::run(
         nullptr);
 
     constexpr std::uint32_t kMaxGroupsX = 65535u;
-    const std::uint32_t groups_x = std::min(output_dim, kMaxGroupsX);
-    const std::uint32_t groups_y =
-        (output_dim + groups_x - 1u) / groups_x;
+    constexpr std::uint32_t kMaxGroupsY = 65535u;
+    const std::uint32_t groups_x =
+        std::min(output_dim, kMaxGroupsX);
+    const std::uint64_t groups_y_64 =
+        (static_cast<std::uint64_t>(output_dim) +
+         groups_x - 1u) /
+        groups_x;
+
+    if (groups_y_64 > kMaxGroupsY) {
+        throw std::runtime_error(
+            "Q8MatVecPipeline output dimension exceeds 2D dispatch capacity");
+    }
 
     const Push push{
         weight_byte_offset,
@@ -275,7 +394,11 @@ void Q8MatVecPipeline::run(
         sizeof(push),
         &push);
 
-    vkCmdDispatch(command_buffer_, groups_x, groups_y, 1);
+    vkCmdDispatch(
+        command_buffer_,
+        groups_x,
+        static_cast<std::uint32_t>(groups_y_64),
+        1);
 
     check(
         vkEndCommandBuffer(command_buffer_),
