@@ -33,7 +33,7 @@ void main() {
         return;
     }
 
-    const uint blocks = (p.input_dim + 31u) / 32u;
+    const uint blocks = p.input_dim / 32u;
     const uint row_base = p.byte_offset + row * blocks * 34u;
     float sum = 0.0;
 
