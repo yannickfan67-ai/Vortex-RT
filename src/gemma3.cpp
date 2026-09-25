@@ -275,13 +275,171 @@ Gemma3Model::Gemma3Model(
     }
 
     const auto* tokens =
-        gguf_.find_metadata("tokenizer.ggml.tokens");
+        gguf_.find_metadata(
+            "tokenizer.ggml.tokens");
+    const auto* scores =
+        gguf_.find_metadata(
+            "tokenizer.ggml.scores");
+    const auto* token_types =
+        gguf_.find_metadata(
+            "tokenizer.ggml.token_type");
+
     if (tokens == nullptr ||
+        scores == nullptr ||
+        token_types == nullptr ||
         !tokens->is_array() ||
-        tokens->array.size() != config_.vocab_size) {
+        !scores->is_array() ||
+        !token_types->is_array() ||
+        tokens->array.size() !=
+            config_.vocab_size ||
+        scores->array.size() !=
+            config_.vocab_size ||
+        token_types->array.size() !=
+            config_.vocab_size) {
         throw std::runtime_error(
-            "Tokenizer vocabulary does not match token embedding");
+            "Gemma 3 tokenizer metadata is incomplete");
     }
+
+    tokenizer_tokens_ =
+        tokens;
+    tokenizer_pieces_.reserve(
+        config_.vocab_size);
+    tokenizer_byte_tokens_.fill(
+        std::numeric_limits<
+            std::uint32_t>::max());
+
+    const auto hex_value =
+        [](char ch) -> int {
+            if (ch >= '0' &&
+                ch <= '9') {
+                return ch - '0';
+            }
+            if (ch >= 'a' &&
+                ch <= 'f') {
+                return ch - 'a' + 10;
+            }
+            if (ch >= 'A' &&
+                ch <= 'F') {
+                return ch - 'A' + 10;
+            }
+            return -1;
+        };
+
+    for (std::uint32_t id = 0;
+         id < config_.vocab_size;
+         ++id) {
+
+        const auto* piece =
+            std::get_if<std::string>(
+                &tokens->array[id].scalar);
+        const auto score_value =
+            scores->array[id].as_f64();
+        const auto type_value =
+            token_types->array[id].as_i64();
+
+        if (piece == nullptr ||
+            !score_value ||
+            !type_value) {
+            continue;
+        }
+
+        const int type =
+            static_cast<int>(
+                *type_value);
+
+        if (type == 6 &&
+            piece->size() == 6 &&
+            (*piece)[0] == '<' &&
+            (*piece)[1] == '0' &&
+            (*piece)[2] == 'x' &&
+            (*piece)[5] == '>') {
+
+            const int hi =
+                hex_value((*piece)[3]);
+            const int lo =
+                hex_value((*piece)[4]);
+
+            if (hi >= 0 &&
+                lo >= 0) {
+                tokenizer_byte_tokens_[
+                    static_cast<std::size_t>(
+                        (hi << 4) | lo)] =
+                    id;
+            }
+            continue;
+        }
+
+        if (type != 1 &&
+            type != 4) {
+            continue;
+        }
+
+        const float score =
+            static_cast<float>(
+                *score_value);
+        const std::string_view view(
+            *piece);
+
+        const auto existing =
+            tokenizer_pieces_.find(
+                view);
+
+        if (existing ==
+                tokenizer_pieces_.end() ||
+            score >
+                existing->second.score) {
+            tokenizer_pieces_[view] =
+                TokenizerEntry{
+                    id,
+                    score,
+                };
+        }
+
+        tokenizer_max_piece_bytes_ =
+            std::max(
+                tokenizer_max_piece_bytes_,
+                piece->size());
+    }
+
+    if (const auto* setting =
+            gguf_.find_metadata(
+                "tokenizer.ggml.add_space_prefix");
+        setting != nullptr) {
+        tokenizer_add_space_prefix_ =
+            setting->as_bool()
+                .value_or(false);
+    }
+
+    const auto unk =
+        gguf_.metadata_u64(
+            "tokenizer.ggml.unknown_token_id")
+            .value_or(3);
+
+    tokenizer_unk_id_ =
+        static_cast<std::uint32_t>(
+            std::min<std::uint64_t>(
+                unk,
+                config_.vocab_size - 1u));
+
+    const auto bos =
+        gguf_.metadata_u64(
+            "tokenizer.ggml.bos_token_id")
+            .value_or(2);
+
+    if (bos >=
+        config_.vocab_size) {
+        throw std::runtime_error(
+            "Gemma 3 BOS token id is out of range");
+    }
+
+    tokenizer_bos_id_ =
+        static_cast<std::uint32_t>(
+            bos);
+
+    tokenizer_eos_id_ =
+        gguf_.metadata_u64(
+            "tokenizer.ggml.eos_token_id")
+            .value_or(1);
 
     layer_tensor_names_.reserve(
         config_.block_count);
