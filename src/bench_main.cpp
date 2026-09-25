@@ -1,4 +1,5 @@
 #include "vortexrt/buffer.hpp"
+#include "vortexrt/build_config.hpp"
 #include "vortexrt/compute_pipeline.hpp"
 #include "vortexrt/vulkan_context.hpp"
 
@@ -8,10 +9,6 @@
 #include <iostream>
 #include <stdexcept>
 #include <vector>
-
-#ifndef VORTEXRT_VECTOR_ADD_SPV
-#error "VORTEXRT_VECTOR_ADD_SPV is not defined"
-#endif
 
 int main() {
     try {
@@ -49,7 +46,7 @@ int main() {
 
         vortexrt::ComputePipeline pipeline(
             context,
-            VORTEXRT_VECTOR_ADD_SPV,
+            vortexrt::build_config::vector_add_spv,
             3,
             256);
 

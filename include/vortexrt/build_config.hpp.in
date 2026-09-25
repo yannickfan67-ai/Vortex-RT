@@ -1,0 +1,7 @@
+#pragma once
+
+namespace vortexrt::build_config {
+
+inline constexpr const char* vector_add_spv = R"VORTEX(@VECTOR_ADD_SPV@)VORTEX";
+
+} // namespace vortexrt::build_config

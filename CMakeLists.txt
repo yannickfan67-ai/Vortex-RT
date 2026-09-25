@@ -35,15 +35,23 @@ add_custom_command(
 
 add_custom_target(vortexrt_shaders ALL DEPENDS "${VECTOR_ADD_SPV}")
 
+configure_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/include/vortexrt/build_config.hpp.in"
+    "${CMAKE_CURRENT_BINARY_DIR}/generated/vortexrt/build_config.hpp"
+    @ONLY
+)
+
 add_library(vortexrt STATIC
     src/vulkan_context.cpp
     src/buffer.cpp
     src/compute_pipeline.cpp
+    src/gguf.cpp
 )
 
 target_include_directories(vortexrt
     PUBLIC
         "${CMAKE_CURRENT_SOURCE_DIR}/include"
+        "${CMAKE_CURRENT_BINARY_DIR}/generated"
 )
 
 target_link_libraries(vortexrt PUBLIC Vulkan::Vulkan)
@@ -60,6 +68,6 @@ target_link_libraries(vortexrt-info PRIVATE vortexrt)
 add_executable(vortexrt-bench src/bench_main.cpp)
 target_link_libraries(vortexrt-bench PRIVATE vortexrt)
 add_dependencies(vortexrt-bench vortexrt_shaders)
-target_compile_definitions(vortexrt-bench
-    PRIVATE VORTEXRT_VECTOR_ADD_SPV="\"${VECTOR_ADD_SPV}\""
-)
+
+add_executable(vortexrt-gguf-info src/gguf_main.cpp)
+target_link_libraries(vortexrt-gguf-info PRIVATE vortexrt)

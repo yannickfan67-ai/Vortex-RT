@@ -3,20 +3,50 @@ name: build
 on:
   push:
   pull_request:
+  workflow_dispatch:
 
 jobs:
-  linux:
+  linux-lavapipe:
     runs-on: ubuntu-24.04
+    env:
+      VK_ICD_FILENAMES: /usr/share/vulkan/icd.d/lvp_icd.x86_64.json
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Vulkan build dependencies
+      - name: Install Vulkan + Lavapipe
         run: |
           sudo apt-get update
-          sudo apt-get install -y libvulkan-dev glslc
+          sudo apt-get install -y libvulkan-dev mesa-vulkan-drivers vulkan-tools glslc curl
 
       - name: Configure
         run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 
       - name: Build
         run: cmake --build build -j2
+
+      - name: Verify CPU Vulkan driver
+        run: vulkaninfo --summary
+
+      - name: Run Vortex-RT on Lavapipe
+        run: |
+          ./build/vortexrt-info
+          ./build/vortexrt-bench
+
+      - name: Download Gemma 3 270M Q8_0
+        run: |
+          curl -L --fail --retry 3 --retry-delay 2             -o gemma-3-270m-Q8_0.gguf             "https://huggingface.co/ggml-org/gemma-3-270m-GGUF/resolve/main/gemma-3-270m-Q8_0.gguf?download=true"
+          echo "e00cf79514204dfe2f4d6943f277ffea7fd8a4c8e955b4b7a869cfc157694881  gemma-3-270m-Q8_0.gguf" | sha256sum -c -
+
+      - name: Parse and validate GGUF
+        run: |
+          ./build/vortexrt-gguf-info gemma-3-270m-Q8_0.gguf --expect-arch gemma3 | tee gguf-report.txt
+          grep -q "Tokenizer tokens readable:" gguf-report.txt
+          grep -q "Validation: OK" gguf-report.txt
+
+      - name: Upload GGUF report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gguf-report
+          path: gguf-report.txt
+          if-no-files-found: ignore
