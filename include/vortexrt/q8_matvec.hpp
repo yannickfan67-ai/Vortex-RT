@@ -49,6 +49,20 @@ public:
         std::uint32_t input_dim,
         std::uint32_t output_dim);
 
+    void run_staged_pair(
+        Buffer& weights,
+        Buffer& input,
+        Buffer& output,
+        Buffer& staging_input,
+        Buffer& staging_output,
+        const void* host_input,
+        std::size_t host_input_bytes,
+        void* host_output,
+        std::size_t host_output_bytes,
+        const std::array<std::uint32_t, 2>& weight_byte_offsets,
+        std::uint32_t input_dim,
+        const std::array<std::uint32_t, 2>& output_dims);
+
     void run_staged_triplet(
         Buffer& weights,
         Buffer& input,
