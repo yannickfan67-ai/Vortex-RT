@@ -21,6 +21,7 @@ endif()
 
 set(VORTEXRT_SHADER_DIR "${CMAKE_CURRENT_BINARY_DIR}/shaders")
 set(VECTOR_ADD_SPV "${VORTEXRT_SHADER_DIR}/vector_add.comp.spv")
+set(Q8_MATVEC_SPV "${VORTEXRT_SHADER_DIR}/q8_matvec.comp.spv")
 
 add_custom_command(
     OUTPUT "${VECTOR_ADD_SPV}"
@@ -33,7 +34,21 @@ add_custom_command(
     VERBATIM
 )
 
-add_custom_target(vortexrt_shaders ALL DEPENDS "${VECTOR_ADD_SPV}")
+add_custom_command(
+    OUTPUT "${Q8_MATVEC_SPV}"
+    COMMAND "${CMAKE_COMMAND}" -E make_directory "${VORTEXRT_SHADER_DIR}"
+    COMMAND "${GLSLC_EXECUTABLE}"
+            -O
+            "${CMAKE_CURRENT_SOURCE_DIR}/shaders/q8_matvec.comp"
+            -o "${Q8_MATVEC_SPV}"
+    DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/q8_matvec.comp"
+    VERBATIM
+)
+
+add_custom_target(
+    vortexrt_shaders ALL
+    DEPENDS "${VECTOR_ADD_SPV}" "${Q8_MATVEC_SPV}"
+)
 
 configure_file(
     "${CMAKE_CURRENT_SOURCE_DIR}/include/vortexrt/build_config.hpp.in"
@@ -45,6 +60,7 @@ add_library(vortexrt STATIC
     src/vulkan_context.cpp
     src/buffer.cpp
     src/compute_pipeline.cpp
+    src/q8_matvec.cpp
     src/gguf.cpp
 )
 
@@ -69,6 +85,10 @@ add_executable(vortexrt-bench src/bench_main.cpp)
 target_link_libraries(vortexrt-bench PRIVATE vortexrt)
 add_dependencies(vortexrt-bench vortexrt_shaders)
 
+add_executable(vortexrt-q8-test src/q8_test_main.cpp)
+target_link_libraries(vortexrt-q8-test PRIVATE vortexrt)
+add_dependencies(vortexrt-q8-test vortexrt_shaders)
+
 add_executable(vortexrt-gguf-info src/gguf_main.cpp)
 target_link_libraries(vortexrt-gguf-info PRIVATE vortexrt)
 
@@ -79,4 +99,5 @@ if(BUILD_TESTING)
         NAME vortexrt-bench-smoke
         COMMAND vortexrt-bench --elements 65536 --repetitions 2
     )
+    add_test(NAME vortexrt-q8-matvec COMMAND vortexrt-q8-test)
 endif()
