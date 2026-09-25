@@ -17,7 +17,8 @@ public:
     Q8MatVecPipeline(
         VulkanContext& context,
         const std::string& spirv_path,
-        const std::string& u8_spirv_path = {});
+        const std::string& u8_spirv_path = {},
+        const std::string& gelu_mul_spirv_path = {});
     ~Q8MatVecPipeline();
 
     Q8MatVecPipeline(const Q8MatVecPipeline&) = delete;
@@ -25,6 +26,10 @@ public:
 
     [[nodiscard]] bool using_native_u8() const noexcept {
         return using_native_u8_;
+    }
+
+    [[nodiscard]] bool ffn_available() const noexcept {
+        return gelu_pipeline_ != VK_NULL_HANDLE;
     }
 
     void run(
@@ -47,6 +52,23 @@ public:
         std::size_t host_output_bytes,
         std::uint32_t weight_byte_offset,
         std::uint32_t input_dim,
+        std::uint32_t output_dim);
+
+    void run_staged_ffn(
+        Buffer& weights,
+        Buffer& input,
+        Buffer& workspace,
+        Buffer& staging_input,
+        Buffer& staging_output,
+        const void* host_input,
+        std::size_t host_input_bytes,
+        void* host_output,
+        std::size_t host_output_bytes,
+        std::uint32_t gate_weight_byte_offset,
+        std::uint32_t up_weight_byte_offset,
+        std::uint32_t down_weight_byte_offset,
+        std::uint32_t input_dim,
+        std::uint32_t ffn_dim,
         std::uint32_t output_dim);
 
     void run_staged_pair(
@@ -100,6 +122,17 @@ private:
     VkDescriptorSetLayout set_layout_ = VK_NULL_HANDLE;
     VkPipelineLayout pipeline_layout_ = VK_NULL_HANDLE;
     VkPipeline pipeline_ = VK_NULL_HANDLE;
+
+    VkDescriptorSetLayout gelu_set_layout_ = VK_NULL_HANDLE;
+    VkPipelineLayout gelu_pipeline_layout_ = VK_NULL_HANDLE;
+    VkPipeline gelu_pipeline_ = VK_NULL_HANDLE;
+    VkDescriptorPool ffn_descriptor_pool_ = VK_NULL_HANDLE;
+    std::array<VkDescriptorSet, 3> ffn_q8_sets_{
+        VK_NULL_HANDLE,
+        VK_NULL_HANDLE,
+        VK_NULL_HANDLE,
+    };
+    VkDescriptorSet ffn_gelu_set_ = VK_NULL_HANDLE;
     VkDescriptorPool descriptor_pool_ = VK_NULL_HANDLE;
     VkDescriptorSet descriptor_set_ = VK_NULL_HANDLE;
     std::array<VkDescriptorSet, 2> pair_sets_{
@@ -114,6 +147,7 @@ private:
     VkCommandPool command_pool_ = VK_NULL_HANDLE;
     VkCommandBuffer staged_command_ = VK_NULL_HANDLE;
     VkCommandBuffer triplet_command_ = VK_NULL_HANDLE;
+    VkCommandBuffer ffn_command_ = VK_NULL_HANDLE;
     VkFence fence_ = VK_NULL_HANDLE;
 
     VkBuffer bound_weights_ = VK_NULL_HANDLE;
@@ -134,6 +168,16 @@ private:
     VkBuffer triplet_bound_output_ = VK_NULL_HANDLE;
     std::array<std::uint32_t, 3> triplet_bound_output_dims_{};
     bool triplet_descriptors_valid_ = false;
+
+    VkBuffer ffn_bound_weights_ = VK_NULL_HANDLE;
+    VkBuffer ffn_bound_input_ = VK_NULL_HANDLE;
+    VkBuffer ffn_bound_workspace_ = VK_NULL_HANDLE;
+    std::uint32_t ffn_bound_input_dim_ = 0;
+    std::uint32_t ffn_bound_ffn_dim_ = 0;
+    std::uint32_t ffn_bound_output_dim_ = 0;
+    bool ffn_descriptors_valid_ = false;
+
+    VkDeviceSize storage_buffer_alignment_ = 1;
 
     std::unordered_map<
         DispatchKey,
