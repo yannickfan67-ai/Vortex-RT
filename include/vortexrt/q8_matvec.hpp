@@ -15,11 +15,16 @@ class Q8MatVecPipeline {
 public:
     Q8MatVecPipeline(
         VulkanContext& context,
-        const std::string& spirv_path);
+        const std::string& spirv_path,
+        const std::string& u8_spirv_path = {});
     ~Q8MatVecPipeline();
 
     Q8MatVecPipeline(const Q8MatVecPipeline&) = delete;
     Q8MatVecPipeline& operator=(const Q8MatVecPipeline&) = delete;
+
+    [[nodiscard]] bool using_native_u8() const noexcept {
+        return using_native_u8_;
+    }
 
     void run(
         Buffer& weights,
@@ -48,6 +53,7 @@ private:
         const DispatchKey& key);
 
     VulkanContext& context_;
+    bool using_native_u8_ = false;
     VkDescriptorSetLayout set_layout_ = VK_NULL_HANDLE;
     VkPipelineLayout pipeline_layout_ = VK_NULL_HANDLE;
     VkPipeline pipeline_ = VK_NULL_HANDLE;
