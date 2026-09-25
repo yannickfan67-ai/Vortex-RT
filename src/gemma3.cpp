@@ -179,6 +179,29 @@ Gemma3Model::Gemma3Model(
     }
 
     kv_cache_.resize(config_.block_count);
+
+    const std::uint32_t max_input_elements =
+        std::max({
+            config_.embedding_length,
+            config_.feed_forward_length,
+            config_.head_count * config_.head_dim,
+        });
+
+    activation_input_ = std::make_unique<Buffer>(
+        context_,
+        static_cast<VkDeviceSize>(max_input_elements) *
+            sizeof(float),
+        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+            VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+
+    activation_output_ = std::make_unique<Buffer>(
+        context_,
+        static_cast<VkDeviceSize>(config_.vocab_size) *
+            sizeof(float),
+        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+            VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
 }
 
 std::vector<float> Gemma3Model::run_q8_matvec(
@@ -223,38 +246,18 @@ std::vector<float> Gemma3Model::run_q8_matvec(
             std::move(cached)).first;
     }
 
-    const auto input_bytes =
-        static_cast<VkDeviceSize>(
-            input.size() * sizeof(float));
     const auto output_elements =
         static_cast<std::size_t>(
             tensor->dimensions[1]);
-    const auto output_bytes =
-        static_cast<VkDeviceSize>(
-            output_elements * sizeof(float));
 
-    Buffer gpu_input(
-        context_,
-        input_bytes,
-        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
-            VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-
-    Buffer gpu_output(
-        context_,
-        output_bytes,
-        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
-            VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-
-    gpu_input.upload(
+    activation_input_->upload(
         input.data(),
         input.size() * sizeof(float));
 
     q8_pipeline_.run(
         *it->second.buffer,
-        gpu_input,
-        gpu_output,
+        *activation_input_,
+        *activation_output_,
         0,
         static_cast<std::uint32_t>(
             tensor->dimensions[0]),
@@ -262,7 +265,7 @@ std::vector<float> Gemma3Model::run_q8_matvec(
             tensor->dimensions[1]));
 
     std::vector<float> output(output_elements);
-    gpu_output.download(
+    activation_output_->download(
         output.data(),
         output.size() * sizeof(float));
 
