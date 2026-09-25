@@ -394,11 +394,49 @@ void Q8MatVecPipeline::run(
         sizeof(push),
         &push);
 
+    VkMemoryBarrier before_dispatch{};
+    before_dispatch.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+    before_dispatch.srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT;
+    before_dispatch.dstAccessMask =
+        VK_ACCESS_SHADER_READ_BIT |
+        VK_ACCESS_SHADER_WRITE_BIT;
+
+    vkCmdPipelineBarrier(
+        command_buffer_,
+        VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+        0,
+        1,
+        &before_dispatch,
+        0,
+        nullptr,
+        0,
+        nullptr);
+
     vkCmdDispatch(
         command_buffer_,
         groups_x,
         static_cast<std::uint32_t>(groups_y_64),
         1);
+
+    VkMemoryBarrier after_dispatch{};
+    after_dispatch.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+    after_dispatch.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+    after_dispatch.dstAccessMask =
+        VK_ACCESS_MEMORY_READ_BIT |
+        VK_ACCESS_MEMORY_WRITE_BIT;
+
+    vkCmdPipelineBarrier(
+        command_buffer_,
+        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+        VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+        0,
+        1,
+        &after_dispatch,
+        0,
+        nullptr,
+        0,
+        nullptr);
 
     check(
         vkEndCommandBuffer(command_buffer_),
