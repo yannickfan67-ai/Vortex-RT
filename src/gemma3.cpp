@@ -98,6 +98,9 @@ Gemma3Model::Gemma3Model(
     const auto subgroup_size =
         context_.capabilities().subgroup_size;
 
+    force_q8_lane_override_ =
+        q8_lane_override != 0;
+
     std::uint32_t selected_lanes =
         q8_lane_override;
 
@@ -427,7 +430,8 @@ Q8MatVecPipeline& Gemma3Model::q8_pipeline_for(
     // keep the base pipeline unless they are part of the fused FFN
     // command, which intentionally uses one consistent pipeline.
     if (q8_pipeline_narrow_ &&
-        input_dim <= 1024u) {
+        (force_q8_lane_override_ ||
+         input_dim <= 1024u)) {
         return *q8_pipeline_narrow_;
     }
 
