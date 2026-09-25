@@ -102,6 +102,26 @@ jobs:
           grep -q "TEXT_BEGIN" gemma-prompt-report.txt
           grep -q "Validation: OK" gemma-prompt-report.txt
 
+      - name: Benchmark Q8 lane and fusion policies
+        run: |
+          set -euo pipefail
+          for lanes in 64 32 16 8; do
+            ./build/vortexrt-gemma gemma-3-270m-Q8_0.gguf \
+              --q8-lanes "$lanes" \
+              --projection-fusion off \
+              --generate 4 \
+              | tee "gemma-q8-${lanes}-report.txt"
+            grep -q "Validation: OK" "gemma-q8-${lanes}-report.txt"
+          done
+
+          ./build/vortexrt-gemma gemma-3-270m-Q8_0.gguf \
+            --q8-lanes 8 \
+            --projection-fusion on \
+            --generate 4 \
+            | tee gemma-q8-8-fused-report.txt
+          grep -q "Validation: OK" gemma-q8-8-fused-report.txt
+          grep -q "Fused FFN: enabled" gemma-q8-8-fused-report.txt
+
       - name: Upload model reports
         if: always()
         uses: actions/upload-artifact@v4
@@ -112,4 +132,5 @@ jobs:
             gemma-forward-report.txt
             gemma-generation-report.txt
             gemma-prompt-report.txt
+            gemma-q8-*-report.txt
           if-no-files-found: ignore
