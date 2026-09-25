@@ -19,6 +19,7 @@ namespace {
 struct Options {
     std::string model_path;
     std::string device;
+    std::string prompt;
     std::uint32_t token_id = 2;
     std::size_t top_k = 8;
     std::size_t generate_tokens = 0;
@@ -91,6 +92,8 @@ Options parse_options(int argc, char** argv) {
                 parse_size(
                     next("--top-k"),
                     "--top-k");
+        } else if (arg == "--prompt") {
+            options.prompt = next("--prompt");
         } else if (arg == "--generate") {
             options.generate_tokens =
                 parse_size(
@@ -108,7 +111,8 @@ Options parse_options(int argc, char** argv) {
                 << "usage: vortexrt-gemma <model.gguf> [options]\n"
                 << "  --token-id N          input token id (default: 2/BOS)\n"
                 << "  --top-k N             display top logits; 0 skips LM head\n"
-                << "  --generate N          greedy-generate N tokens from BOS with KV cache\n"
+                << "  --prompt TEXT         tokenize/prefill a text prompt before generation\n"
+                << "  --generate N          greedy-generate N tokens with KV cache\n"
                 << "  --device <index|name> Vulkan device selector\n";
             std::exit(0);
         } else {
@@ -187,9 +191,22 @@ int main(int argc, char** argv) {
                 << options.generate_tokens
                 << " token(s)\n";
 
+            const auto prompt_tokens =
+                model.tokenize(options.prompt, true);
+
+            std::cout << "  Prompt token ids:";
+            for (const auto id : prompt_tokens) {
+                std::cout << " " << id;
+            }
+            std::cout << "\n";
+
             const auto generated =
-                model.generate_greedy_from_bos(
-                    options.generate_tokens);
+                options.prompt.empty()
+                    ? model.generate_greedy_from_bos(
+                          options.generate_tokens)
+                    : model.generate_greedy(
+                          options.prompt,
+                          options.generate_tokens);
 
             std::cout << "  Generated token ids:";
             for (const auto id : generated.token_ids) {
