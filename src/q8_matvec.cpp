@@ -865,6 +865,389 @@ void Q8MatVecPipeline::run_staged(
     }
 }
 
+void Q8MatVecPipeline::run_staged_pair(
+    Buffer& weights,
+    Buffer& input,
+    Buffer& output,
+    Buffer& staging_input,
+    Buffer& staging_output,
+    const void* host_input,
+    std::size_t host_input_bytes,
+    void* host_output,
+    std::size_t host_output_bytes,
+    const std::array<std::uint32_t, 2>& weight_byte_offsets,
+    std::uint32_t input_dim,
+    const std::array<std::uint32_t, 2>& output_dims) {
+
+    if (host_input == nullptr ||
+        host_output == nullptr) {
+        throw std::runtime_error(
+            "Q8MatVecPipeline::run_staged_pair received null host buffer");
+    }
+    if (input_dim == 0 ||
+        (input_dim % kQ8BlockElements) != 0) {
+        throw std::runtime_error(
+            "Q8MatVecPipeline pair input_dim must be non-zero and divisible by 32");
+    }
+
+    const std::uint64_t required_input_bytes =
+        checked_mul(
+            input_dim,
+            sizeof(float),
+            "Q8 pair input byte size overflow");
+
+    if (required_input_bytes > input.size() ||
+        required_input_bytes > staging_input.size() ||
+        host_input_bytes < required_input_bytes) {
+        throw std::runtime_error(
+            "Q8 pair input buffer is too small");
+    }
+
+    const std::uint64_t blocks =
+        static_cast<std::uint64_t>(input_dim) /
+        kQ8BlockElements;
+    const std::uint64_t row_bytes =
+        checked_mul(
+            blocks,
+            kQ8BlockBytes,
+            "Q8 pair row byte size overflow");
+
+    std::array<VkDeviceSize, 2> output_offsets{};
+    std::uint64_t total_output_bytes = 0;
+
+    for (std::size_t i = 0;
+         i < output_dims.size();
+         ++i) {
+
+        if (output_dims[i] == 0) {
+            throw std::runtime_error(
+                "Q8 pair output dimensions must be non-zero");
+        }
+        if ((weight_byte_offsets[i] & 3u) != 0u) {
+            throw std::runtime_error(
+                "Q8 pair weight offsets must be 4-byte aligned");
+        }
+
+        const std::uint64_t matrix_bytes =
+            checked_mul(
+                output_dims[i],
+                row_bytes,
+                "Q8 pair matrix byte size overflow");
+        const std::uint64_t weight_end =
+            checked_add(
+                weight_byte_offsets[i],
+                matrix_bytes,
+                "Q8 pair weight range overflow");
+
+        if (weight_end > weights.size()) {
+            throw std::runtime_error(
+                "Q8 pair weight buffer is too small");
+        }
+
+        output_offsets[i] =
+            static_cast<VkDeviceSize>(
+                total_output_bytes);
+
+        total_output_bytes =
+            checked_add(
+                total_output_bytes,
+                checked_mul(
+                    output_dims[i],
+                    sizeof(float),
+                    "Q8 pair output byte size overflow"),
+                "Q8 pair packed output size overflow");
+    }
+
+    if (total_output_bytes > output.size() ||
+        total_output_bytes > staging_output.size() ||
+        host_output_bytes < total_output_bytes) {
+        throw std::runtime_error(
+            "Q8 pair output buffer is too small");
+    }
+
+    staging_input.upload(
+        host_input,
+        static_cast<std::size_t>(
+            required_input_bytes));
+
+    for (std::size_t set_index = 0;
+         set_index < triplet_sets_.size();
+         ++set_index) {
+
+        const VkDeviceSize output_bytes =
+            static_cast<VkDeviceSize>(
+                output_dims[set_index]) *
+            sizeof(float);
+
+        std::array<VkDescriptorBufferInfo, 3> infos{{
+            {
+                weights.handle(),
+                0,
+                weights.size(),
+            },
+            {
+                input.handle(),
+                0,
+                input.size(),
+            },
+            {
+                output.handle(),
+                output_offsets[set_index],
+                output_bytes,
+            },
+        }};
+
+        std::array<VkWriteDescriptorSet, 3> writes{};
+        for (std::uint32_t binding = 0;
+             binding < writes.size();
+             ++binding) {
+            writes[binding].sType =
+                VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            writes[binding].dstSet =
+                triplet_sets_[set_index];
+            writes[binding].dstBinding =
+                binding;
+            writes[binding].descriptorCount = 1;
+            writes[binding].descriptorType =
+                VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            writes[binding].pBufferInfo =
+                &infos[binding];
+        }
+
+        vkUpdateDescriptorSets(
+            context_.device(),
+            static_cast<std::uint32_t>(
+                writes.size()),
+            writes.data(),
+            0,
+            nullptr);
+    }
+
+    if (triplet_command_ == VK_NULL_HANDLE) {
+        VkCommandBufferAllocateInfo allocate{};
+        allocate.sType =
+            VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+        allocate.commandPool =
+            command_pool_;
+        allocate.level =
+            VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        allocate.commandBufferCount = 1;
+
+        check(
+            vkAllocateCommandBuffers(
+                context_.device(),
+                &allocate,
+                &triplet_command_),
+            "vkAllocateCommandBuffers failed for Q8 pair");
+    }
+
+    check(
+        vkResetCommandBuffer(
+            triplet_command_,
+            0),
+        "vkResetCommandBuffer failed for Q8 pair");
+
+    VkCommandBufferBeginInfo begin{};
+    begin.sType =
+        VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    begin.flags =
+        VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+
+    check(
+        vkBeginCommandBuffer(
+            triplet_command_,
+            &begin),
+        "vkBeginCommandBuffer failed for Q8 pair");
+
+    VkBufferCopy input_copy{};
+    input_copy.size =
+        static_cast<VkDeviceSize>(
+            required_input_bytes);
+
+    vkCmdCopyBuffer(
+        triplet_command_,
+        staging_input.handle(),
+        input.handle(),
+        1,
+        &input_copy);
+
+    VkMemoryBarrier input_barrier{};
+    input_barrier.sType =
+        VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+    input_barrier.srcAccessMask =
+        VK_ACCESS_TRANSFER_WRITE_BIT;
+    input_barrier.dstAccessMask =
+        VK_ACCESS_SHADER_READ_BIT;
+
+    vkCmdPipelineBarrier(
+        triplet_command_,
+        VK_PIPELINE_STAGE_TRANSFER_BIT,
+        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+        0,
+        1,
+        &input_barrier,
+        0,
+        nullptr,
+        0,
+        nullptr);
+
+    vkCmdBindPipeline(
+        triplet_command_,
+        VK_PIPELINE_BIND_POINT_COMPUTE,
+        pipeline_);
+
+    constexpr std::uint32_t kMaxGroupsX =
+        65535u;
+    constexpr std::uint32_t kMaxGroupsY =
+        65535u;
+
+    for (std::size_t projection = 0;
+         projection < output_dims.size();
+         ++projection) {
+
+        vkCmdBindDescriptorSets(
+            triplet_command_,
+            VK_PIPELINE_BIND_POINT_COMPUTE,
+            pipeline_layout_,
+            0,
+            1,
+            &triplet_sets_[projection],
+            0,
+            nullptr);
+
+        const std::uint32_t groups_x =
+            std::min(
+                output_dims[projection],
+                kMaxGroupsX);
+        const std::uint64_t groups_y_64 =
+            (static_cast<std::uint64_t>(
+                 output_dims[projection]) +
+             groups_x - 1u) /
+            groups_x;
+
+        if (groups_y_64 > kMaxGroupsY) {
+            throw std::runtime_error(
+                "Q8 pair output dimension exceeds dispatch capacity");
+        }
+
+        const Push push{
+            weight_byte_offsets[projection],
+            input_dim,
+            output_dims[projection],
+            groups_x,
+        };
+
+        vkCmdPushConstants(
+            triplet_command_,
+            pipeline_layout_,
+            VK_SHADER_STAGE_COMPUTE_BIT,
+            0,
+            sizeof(push),
+            &push);
+
+        vkCmdDispatch(
+            triplet_command_,
+            groups_x,
+            static_cast<std::uint32_t>(
+                groups_y_64),
+            1);
+    }
+
+    VkMemoryBarrier output_barrier{};
+    output_barrier.sType =
+        VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+    output_barrier.srcAccessMask =
+        VK_ACCESS_SHADER_WRITE_BIT;
+    output_barrier.dstAccessMask =
+        VK_ACCESS_TRANSFER_READ_BIT;
+
+    vkCmdPipelineBarrier(
+        triplet_command_,
+        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+        VK_PIPELINE_STAGE_TRANSFER_BIT,
+        0,
+        1,
+        &output_barrier,
+        0,
+        nullptr,
+        0,
+        nullptr);
+
+    VkBufferCopy output_copy{};
+    output_copy.size =
+        static_cast<VkDeviceSize>(
+            total_output_bytes);
+
+    vkCmdCopyBuffer(
+        triplet_command_,
+        output.handle(),
+        staging_output.handle(),
+        1,
+        &output_copy);
+
+    VkMemoryBarrier host_barrier{};
+    host_barrier.sType =
+        VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+    host_barrier.srcAccessMask =
+        VK_ACCESS_TRANSFER_WRITE_BIT;
+    host_barrier.dstAccessMask =
+        VK_ACCESS_HOST_READ_BIT;
+
+    vkCmdPipelineBarrier(
+        triplet_command_,
+        VK_PIPELINE_STAGE_TRANSFER_BIT,
+        VK_PIPELINE_STAGE_HOST_BIT,
+        0,
+        1,
+        &host_barrier,
+        0,
+        nullptr,
+        0,
+        nullptr);
+
+    check(
+        vkEndCommandBuffer(
+            triplet_command_),
+        "vkEndCommandBuffer failed for Q8 pair");
+
+    check(
+        vkResetFences(
+            context_.device(),
+            1,
+            &fence_),
+        "vkResetFences failed for Q8 pair");
+
+    VkSubmitInfo submit{};
+    submit.sType =
+        VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submit.commandBufferCount = 1;
+    submit.pCommandBuffers =
+        &triplet_command_;
+
+    check(
+        vkQueueSubmit(
+            context_.compute_queue(),
+            1,
+            &submit,
+            fence_),
+        "vkQueueSubmit failed for Q8 pair");
+
+    check(
+        vkWaitForFences(
+            context_.device(),
+            1,
+            &fence_,
+            VK_TRUE,
+            UINT64_MAX),
+        "vkWaitForFences failed for Q8 pair");
+
+    staging_output.download(
+        host_output,
+        static_cast<std::size_t>(
+            total_output_bytes));
+}
+
+
 void Q8MatVecPipeline::run_staged_triplet(
     Buffer& weights,
     Buffer& input,
