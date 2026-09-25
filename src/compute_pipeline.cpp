@@ -356,12 +356,71 @@ void ComputePipeline::record_commands(
         sizeof(element_count),
         &element_count);
 
+    VkMemoryBarrier before_dispatch{};
+    before_dispatch.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+    before_dispatch.srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT;
+    before_dispatch.dstAccessMask =
+        VK_ACCESS_SHADER_READ_BIT |
+        VK_ACCESS_SHADER_WRITE_BIT;
+
+    vkCmdPipelineBarrier(
+        command_buffer_,
+        VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+        0,
+        1,
+        &before_dispatch,
+        0,
+        nullptr,
+        0,
+        nullptr);
+
     const std::uint32_t groups =
         (element_count + local_size_x_ - 1) / local_size_x_;
 
     for (std::uint32_t i = 0; i < repetitions; ++i) {
         vkCmdDispatch(command_buffer_, groups, 1, 1);
+
+        if (i + 1 < repetitions) {
+            VkMemoryBarrier between_dispatches{};
+            between_dispatches.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+            between_dispatches.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+            between_dispatches.dstAccessMask =
+                VK_ACCESS_SHADER_READ_BIT |
+                VK_ACCESS_SHADER_WRITE_BIT;
+
+            vkCmdPipelineBarrier(
+                command_buffer_,
+                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                0,
+                1,
+                &between_dispatches,
+                0,
+                nullptr,
+                0,
+                nullptr);
+        }
     }
+
+    VkMemoryBarrier after_dispatch{};
+    after_dispatch.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+    after_dispatch.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+    after_dispatch.dstAccessMask =
+        VK_ACCESS_MEMORY_READ_BIT |
+        VK_ACCESS_MEMORY_WRITE_BIT;
+
+    vkCmdPipelineBarrier(
+        command_buffer_,
+        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+        VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+        0,
+        1,
+        &after_dispatch,
+        0,
+        nullptr,
+        0,
+        nullptr);
 
     if (query_pool_ != VK_NULL_HANDLE) {
         vkCmdWriteTimestamp(
