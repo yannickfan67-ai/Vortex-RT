@@ -203,6 +203,11 @@ int main(int argc, char** argv) {
             << config.sliding_window << "\n"
             << "  Vocab: "
             << config.vocab_size << "\n"
+            << "  Projection fusion: "
+            << (model.projection_fusion_enabled()
+                    ? "enabled"
+                    : "disabled")
+            << "\n"
             << "  Model load: "
             << model_load_ms << " ms\n"
             << "  Runtime setup: "
