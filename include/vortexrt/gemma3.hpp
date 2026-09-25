@@ -4,6 +4,7 @@
 #include "vortexrt/gguf.hpp"
 #include "vortexrt/q8_matvec.hpp"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -92,6 +93,10 @@ private:
 
     [[nodiscard]] std::size_t run_q8_matvec_to_output(
         const std::string& tensor_name,
+        const std::vector<float>& input);
+
+    [[nodiscard]] std::array<std::vector<float>, 3> run_q8_triplet(
+        const std::array<std::string, 3>& tensor_names,
         const std::vector<float>& input);
 
     [[nodiscard]] std::vector<float> rms_norm(
