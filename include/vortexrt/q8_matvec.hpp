@@ -34,6 +34,20 @@ public:
         std::uint32_t input_dim,
         std::uint32_t output_dim);
 
+    void run_staged(
+        Buffer& weights,
+        Buffer& input,
+        Buffer& output,
+        Buffer& staging_input,
+        Buffer& staging_output,
+        const void* host_input,
+        std::size_t host_input_bytes,
+        void* host_output,
+        std::size_t host_output_bytes,
+        std::uint32_t weight_byte_offset,
+        std::uint32_t input_dim,
+        std::uint32_t output_dim);
+
 private:
     struct DispatchKey {
         std::uint32_t weight_byte_offset = 0;
@@ -60,6 +74,7 @@ private:
     VkDescriptorPool descriptor_pool_ = VK_NULL_HANDLE;
     VkDescriptorSet descriptor_set_ = VK_NULL_HANDLE;
     VkCommandPool command_pool_ = VK_NULL_HANDLE;
+    VkCommandBuffer staged_command_ = VK_NULL_HANDLE;
     VkFence fence_ = VK_NULL_HANDLE;
 
     VkBuffer bound_weights_ = VK_NULL_HANDLE;
