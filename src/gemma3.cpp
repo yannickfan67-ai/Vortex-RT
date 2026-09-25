@@ -6,6 +6,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <fstream>
 #include <limits>
 #include <numeric>
 #include <stdexcept>
@@ -180,6 +181,73 @@ Gemma3Model::Gemma3Model(
 
     kv_cache_.resize(config_.block_count);
 
+    const std::uint64_t tensor_data_bytes =
+        gguf_.file_size() - gguf_.data_offset();
+
+    if (tensor_data_bytes == 0 ||
+        tensor_data_bytes >
+            std::numeric_limits<std::uint32_t>::max()) {
+        throw std::runtime_error(
+            "Current Q8 shader requires GGUF tensor data below 4 GiB");
+    }
+
+    weights_arena_ = std::make_unique<Buffer>(
+        context_,
+        static_cast<VkDeviceSize>(tensor_data_bytes),
+        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+            VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+
+    // Upload the GGUF tensor-data section once.  Chunking keeps the
+    // persistent host-visible Vulkan staging arena modest instead of
+    // growing it to the full model size.
+    std::ifstream model_file(
+        gguf_path,
+        std::ios::binary);
+    if (!model_file) {
+        throw std::runtime_error(
+            "Failed to reopen GGUF for weight arena upload");
+    }
+
+    model_file.seekg(
+        static_cast<std::streamoff>(gguf_.data_offset()),
+        std::ios::beg);
+    if (!model_file) {
+        throw std::runtime_error(
+            "Failed to seek to GGUF tensor data");
+    }
+
+    constexpr std::size_t kUploadChunk =
+        32u * 1024u * 1024u;
+    std::vector<std::byte> upload_chunk(kUploadChunk);
+
+    std::uint64_t uploaded = 0;
+    while (uploaded < tensor_data_bytes) {
+        const auto remaining =
+            tensor_data_bytes - uploaded;
+        const std::size_t bytes =
+            static_cast<std::size_t>(
+                std::min<std::uint64_t>(
+                    remaining,
+                    kUploadChunk));
+
+        model_file.read(
+            reinterpret_cast<char*>(
+                upload_chunk.data()),
+            static_cast<std::streamsize>(bytes));
+        if (model_file.gcount() !=
+            static_cast<std::streamsize>(bytes)) {
+            throw std::runtime_error(
+                "Short read while uploading GGUF weight arena");
+        }
+
+        weights_arena_->upload(
+            upload_chunk.data(),
+            bytes,
+            static_cast<VkDeviceSize>(uploaded));
+        uploaded += bytes;
+    }
+
     const std::uint32_t max_input_elements =
         std::max({
             config_.embedding_length,
@@ -217,33 +285,16 @@ std::vector<float> Gemma3Model::run_q8_matvec(
         tensor->dimensions[0] >
             std::numeric_limits<std::uint32_t>::max() ||
         tensor->dimensions[1] >
+            std::numeric_limits<std::uint32_t>::max() ||
+        tensor->offset >
             std::numeric_limits<std::uint32_t>::max()) {
         throw std::runtime_error(
             "Unsupported Q8_0 matrix layout: " + tensor_name);
     }
 
-    auto it = q8_weights_.find(tensor_name);
-    if (it == q8_weights_.end()) {
-        const auto encoded =
-            gguf_.read_tensor_bytes(*tensor);
-        if (encoded.empty()) {
-            throw std::runtime_error(
-                "Q8_0 tensor payload is empty: " + tensor_name);
-        }
-
-        CachedQ8Weight cached{};
-        cached.tensor = tensor;
-        cached.buffer = std::make_unique<Buffer>(
-            context_,
-            static_cast<VkDeviceSize>(encoded.size()),
-            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
-                VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-            VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-        cached.buffer->upload(encoded.data(), encoded.size());
-
-        it = q8_weights_.emplace(
-            tensor_name,
-            std::move(cached)).first;
+    if (!weights_arena_) {
+        throw std::runtime_error(
+            "Gemma 3 weight arena is not initialized");
     }
 
     const auto output_elements =
@@ -255,10 +306,11 @@ std::vector<float> Gemma3Model::run_q8_matvec(
         input.size() * sizeof(float));
 
     q8_pipeline_.run(
-        *it->second.buffer,
+        *weights_arena_,
         *activation_input_,
         *activation_output_,
-        0,
+        static_cast<std::uint32_t>(
+            tensor->offset),
         static_cast<std::uint32_t>(
             tensor->dimensions[0]),
         static_cast<std::uint32_t>(
