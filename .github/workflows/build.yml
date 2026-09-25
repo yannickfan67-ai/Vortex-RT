@@ -8,6 +8,7 @@ on:
 jobs:
   linux-lavapipe:
     runs-on: ubuntu-24.04
+
     steps:
       - uses: actions/checkout@v4
 
@@ -27,7 +28,7 @@ jobs:
           echo "VK_DRIVER_FILES=$LVP" >> "$GITHUB_ENV"
 
       - name: Configure
-        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
 
       - name: Build
         run: cmake --build build -j2
@@ -35,10 +36,8 @@ jobs:
       - name: Verify CPU Vulkan driver
         run: vulkaninfo --summary
 
-      - name: Run Vortex-RT on Lavapipe
-        run: |
-          ./build/vortexrt-info
-          ./build/vortexrt-bench
+      - name: Run Vulkan smoke tests
+        run: ctest --test-dir build --output-on-failure
 
       - name: Download Gemma 3 270M Q8_0
         run: |
