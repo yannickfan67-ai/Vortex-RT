@@ -304,6 +304,22 @@ Gemma3Model::Gemma3Model(
         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
             VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
         VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+
+    staging_input_ = std::make_unique<Buffer>(
+        context_,
+        static_cast<VkDeviceSize>(max_input_elements) *
+            sizeof(float),
+        VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+            VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+
+    staging_output_ = std::make_unique<Buffer>(
+        context_,
+        static_cast<VkDeviceSize>(config_.vocab_size) *
+            sizeof(float),
+        VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+            VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
 }
 
 std::vector<float> Gemma3Model::run_q8_matvec(
@@ -335,25 +351,24 @@ std::vector<float> Gemma3Model::run_q8_matvec(
         static_cast<std::size_t>(
             tensor->dimensions[1]);
 
-    activation_input_->upload(
-        input.data(),
-        input.size() * sizeof(float));
+    std::vector<float> output(output_elements);
 
-    q8_pipeline_.run(
+    q8_pipeline_.run_staged(
         *weights_arena_,
         *activation_input_,
         *activation_output_,
+        *staging_input_,
+        *staging_output_,
+        input.data(),
+        input.size() * sizeof(float),
+        output.data(),
+        output.size() * sizeof(float),
         static_cast<std::uint32_t>(
             tensor->offset),
         static_cast<std::uint32_t>(
             tensor->dimensions[0]),
         static_cast<std::uint32_t>(
             tensor->dimensions[1]));
-
-    std::vector<float> output(output_elements);
-    activation_output_->download(
-        output.data(),
-        output.size() * sizeof(float));
 
     return output;
 }
