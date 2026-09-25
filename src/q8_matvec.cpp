@@ -152,11 +152,11 @@ Q8MatVecPipeline::Q8MatVecPipeline(
 
         VkDescriptorPoolSize ps{};
         ps.type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        ps.descriptorCount = 3;
+        ps.descriptorCount = 12;
 
         VkDescriptorPoolCreateInfo dp{};
         dp.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-        dp.maxSets = 1;
+        dp.maxSets = 4;
         dp.poolSizeCount = 1;
         dp.pPoolSizes = &ps;
         check(
@@ -164,15 +164,31 @@ Q8MatVecPipeline::Q8MatVecPipeline(
                 context.device(), &dp, nullptr, &descriptor_pool_),
             "vkCreateDescriptorPool failed");
 
+        std::array<VkDescriptorSetLayout, 4> layouts{
+            set_layout_,
+            set_layout_,
+            set_layout_,
+            set_layout_,
+        };
+        std::array<VkDescriptorSet, 4> sets{};
+
         VkDescriptorSetAllocateInfo da{};
         da.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
         da.descriptorPool = descriptor_pool_;
-        da.descriptorSetCount = 1;
-        da.pSetLayouts = &set_layout_;
+        da.descriptorSetCount =
+            static_cast<std::uint32_t>(sets.size());
+        da.pSetLayouts = layouts.data();
         check(
             vkAllocateDescriptorSets(
-                context.device(), &da, &descriptor_set_),
+                context.device(),
+                &da,
+                sets.data()),
             "vkAllocateDescriptorSets failed");
+
+        descriptor_set_ = sets[0];
+        triplet_sets_[0] = sets[1];
+        triplet_sets_[1] = sets[2];
+        triplet_sets_[2] = sets[3];
 
         VkCommandPoolCreateInfo pci{};
         pci.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
@@ -218,6 +234,7 @@ void Q8MatVecPipeline::cleanup() noexcept {
         vkDestroyDescriptorPool(device, descriptor_pool_, nullptr);
         descriptor_pool_ = VK_NULL_HANDLE;
         descriptor_set_ = VK_NULL_HANDLE;
+        triplet_sets_.fill(VK_NULL_HANDLE);
     }
     if (pipeline_ != VK_NULL_HANDLE) {
         vkDestroyPipeline(device, pipeline_, nullptr);
