@@ -507,7 +507,7 @@ std::string Gemma3Model::decode_piece(
         }
     }
 
-    const std::string marker = "\\xE2\\x96\\x81";
+    const std::string marker = "▁";
     std::size_t pos = 0;
     while ((pos = piece.find(marker, pos)) !=
            std::string::npos) {
