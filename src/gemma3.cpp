@@ -46,7 +46,7 @@ float require_f32(
     return static_cast<float>(*number);
 }
 
-const GgufTensorInfo& require_tensor(
+const GgufTensorInfo* require_tensor(
     const GgufFile& gguf,
     const std::string& name) {
 
@@ -55,7 +55,7 @@ const GgufTensorInfo& require_tensor(
         throw std::runtime_error(
             "Missing Gemma 3 tensor: " + name);
     }
-    return *tensor;
+    return tensor;
 }
 
 std::string layer_tensor(
@@ -103,19 +103,19 @@ Gemma3Model::Gemma3Model(
             gguf_,
             "gemma3.attention.layer_norm_rms_epsilon");
 
-    const auto& embedding =
+    const auto* embedding =
         require_tensor(gguf_, "token_embd.weight");
-    if (embedding.type != 8 ||
-        embedding.dimensions.size() != 2 ||
-        embedding.dimensions[0] != config_.embedding_length ||
-        embedding.dimensions[1] >
+    if (embedding->type != 8 ||
+        embedding->dimensions.size() != 2 ||
+        embedding->dimensions[0] != config_.embedding_length ||
+        embedding->dimensions[1] >
             std::numeric_limits<std::uint32_t>::max()) {
         throw std::runtime_error(
             "Unsupported token_embd.weight layout");
     }
 
     config_.vocab_size =
-        static_cast<std::uint32_t>(embedding.dimensions[1]);
+        static_cast<std::uint32_t>(embedding->dimensions[1]);
 
     if (config_.embedding_length == 0 ||
         config_.block_count == 0 ||
@@ -164,22 +164,22 @@ std::vector<float> Gemma3Model::run_q8_matvec(
     const std::string& tensor_name,
     const std::vector<float>& input) {
 
-    const auto& tensor =
+    const auto* tensor =
         require_tensor(gguf_, tensor_name);
 
-    if (tensor.type != 8 ||
-        tensor.dimensions.size() != 2 ||
-        tensor.dimensions[0] != input.size() ||
-        tensor.dimensions[0] >
+    if (tensor->type != 8 ||
+        tensor->dimensions.size() != 2 ||
+        tensor->dimensions[0] != input.size() ||
+        tensor->dimensions[0] >
             std::numeric_limits<std::uint32_t>::max() ||
-        tensor.dimensions[1] >
+        tensor->dimensions[1] >
             std::numeric_limits<std::uint32_t>::max()) {
         throw std::runtime_error(
             "Unsupported Q8_0 matrix layout: " + tensor_name);
     }
 
     const auto encoded =
-        gguf_.read_tensor_bytes(tensor);
+        gguf_.read_tensor_bytes(*tensor);
     if (encoded.empty()) {
         throw std::runtime_error(
             "Q8_0 tensor payload is empty: " + tensor_name);
@@ -189,7 +189,7 @@ std::vector<float> Gemma3Model::run_q8_matvec(
         static_cast<VkDeviceSize>(
             input.size() * sizeof(float));
     const auto output_elements =
-        static_cast<std::size_t>(tensor.dimensions[1]);
+        static_cast<std::size_t>(tensor->dimensions[1]);
     const auto output_bytes =
         static_cast<VkDeviceSize>(
             output_elements * sizeof(float));
@@ -225,8 +225,8 @@ std::vector<float> Gemma3Model::run_q8_matvec(
         gpu_input,
         gpu_output,
         0,
-        static_cast<std::uint32_t>(tensor.dimensions[0]),
-        static_cast<std::uint32_t>(tensor.dimensions[1]));
+        static_cast<std::uint32_t>(tensor->dimensions[0]),
+        static_cast<std::uint32_t>(tensor->dimensions[1]));
 
     std::vector<float> output(output_elements);
     gpu_output.download(
@@ -240,10 +240,10 @@ std::vector<float> Gemma3Model::rms_norm(
     const std::vector<float>& input,
     const std::string& weight_name) const {
 
-    const auto& tensor =
+    const auto* tensor =
         require_tensor(gguf_, weight_name);
     const auto weights =
-        gguf_.read_f32_tensor(tensor);
+        gguf_.read_f32_tensor(*tensor);
 
     if (weights.size() != input.size()) {
         throw std::runtime_error(
@@ -283,10 +283,10 @@ std::vector<float> Gemma3Model::token_embedding(
             "Token id is outside Gemma 3 vocabulary");
     }
 
-    const auto& embedding =
+    const auto* embedding =
         require_tensor(gguf_, "token_embd.weight");
     auto values =
-        gguf_.read_q8_0_row(embedding, token_id);
+        gguf_.read_q8_0_row(*embedding, token_id);
 
     if (values.size() != config_.embedding_length) {
         throw std::runtime_error(
