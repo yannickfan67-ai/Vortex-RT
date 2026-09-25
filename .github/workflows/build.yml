@@ -61,10 +61,19 @@ jobs:
           grep -q "Tokenizer tokens readable:" gguf-report.txt
           grep -q "Validation: OK" gguf-report.txt
 
+      - name: Run real Gemma 3 position-zero forward
+        run: |
+          ./build/vortexrt-gemma gemma-3-270m-Q8_0.gguf --token-id 2 --top-k 0 | tee gemma-forward-report.txt
+          grep -q "Layers: 18" gemma-forward-report.txt
+          grep -q "Final hidden checksum:" gemma-forward-report.txt
+          grep -q "Validation: OK" gemma-forward-report.txt
+
       - name: Upload GGUF report
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: gguf-report
-          path: gguf-report.txt
+          path: |
+            gguf-report.txt
+            gemma-forward-report.txt
           if-no-files-found: ignore
