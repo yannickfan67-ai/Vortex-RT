@@ -28,12 +28,9 @@ public:
     void download(void* data, std::size_t bytes, VkDeviceSize offset = 0) const;
 
 private:
-    void copy_from(VkBuffer src, VkDeviceSize bytes, VkDeviceSize dst_offset = 0);
-    void copy_to(VkBuffer dst, VkDeviceSize bytes, VkDeviceSize src_offset = 0) const;
-
     VulkanContext& context_;
     VkBuffer buffer_ = VK_NULL_HANDLE;
-    VkDeviceMemory memory_ = VK_NULL_HANDLE;
+    BufferMemoryAllocation allocation_{};
     VkDeviceSize size_ = 0;
     VkMemoryPropertyFlags memory_properties_ = 0;
 };
