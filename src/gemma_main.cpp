@@ -289,12 +289,9 @@ int main(int argc, char** argv) {
                 std::chrono::steady_clock::now();
 
             const auto generated =
-                options.prompt.empty()
-                    ? model.generate_greedy_from_bos(
-                          options.generate_tokens)
-                    : model.generate_greedy(
-                          options.prompt,
-                          options.generate_tokens);
+                model.generate_greedy_tokens(
+                    prompt_tokens,
+                    options.generate_tokens);
 
             const auto generation_end =
                 std::chrono::steady_clock::now();
