@@ -1,0 +1,422 @@
+#include "vortexrt/q8_matvec.hpp"
+
+#include <algorithm>
+#include <array>
+#include <cstdint>
+#include <fstream>
+#include <limits>
+#include <stdexcept>
+#include <vector>
+
+namespace vortexrt {
+namespace {
+
+void check(VkResult result, const char* what) {
+    if (result != VK_SUCCESS) {
+        throw std::runtime_error(what);
+    }
+}
+
+std::vector<std::uint32_t> load_spv(const std::string& path) {
+    std::ifstream file(path, std::ios::binary | std::ios::ate);
+    if (!file) {
+        throw std::runtime_error("failed to open SPIR-V: " + path);
+    }
+
+    const auto size = file.tellg();
+    if (size <= 0 || (size % 4) != 0) {
+        throw std::runtime_error("invalid SPIR-V");
+    }
+
+    file.seekg(0);
+    std::vector<std::uint32_t> words(static_cast<std::size_t>(size) / 4);
+    if (!file.read(reinterpret_cast<char*>(words.data()), size)) {
+        throw std::runtime_error("failed to read SPIR-V");
+    }
+    return words;
+}
+
+struct Push {
+    std::uint32_t offset;
+    std::uint32_t in_dim;
+    std::uint32_t out_dim;
+    std::uint32_t groups_x;
+};
+
+constexpr std::uint64_t kQ8BlockElements = 32;
+constexpr std::uint64_t kQ8BlockBytes = 34;
+
+std::uint64_t checked_mul(
+    std::uint64_t a,
+    std::uint64_t b,
+    const char* what) {
+
+    if (a != 0 && b > std::numeric_limits<std::uint64_t>::max() / a) {
+        throw std::runtime_error(what);
+    }
+    return a * b;
+}
+
+std::uint64_t checked_add(
+    std::uint64_t a,
+    std::uint64_t b,
+    const char* what) {
+
+    if (b > std::numeric_limits<std::uint64_t>::max() - a) {
+        throw std::runtime_error(what);
+    }
+    return a + b;
+}
+
+} // namespace
+
+Q8MatVecPipeline::Q8MatVecPipeline(
+    VulkanContext& context,
+    const std::string& path)
+    : context_(context) {
+
+    const auto code = load_spv(path);
+
+    VkShaderModuleCreateInfo sm{};
+    sm.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+    sm.codeSize = code.size() * sizeof(std::uint32_t);
+    sm.pCode = code.data();
+
+    VkShaderModule shader = VK_NULL_HANDLE;
+    check(
+        vkCreateShaderModule(context.device(), &sm, nullptr, &shader),
+        "vkCreateShaderModule failed");
+
+    try {
+        std::array<VkDescriptorSetLayoutBinding, 3> bindings{};
+        for (std::uint32_t i = 0; i < bindings.size(); ++i) {
+            bindings[i].binding = i;
+            bindings[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            bindings[i].descriptorCount = 1;
+            bindings[i].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+        }
+
+        VkDescriptorSetLayoutCreateInfo sl{};
+        sl.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+        sl.bindingCount = static_cast<std::uint32_t>(bindings.size());
+        sl.pBindings = bindings.data();
+        check(
+            vkCreateDescriptorSetLayout(
+                context.device(), &sl, nullptr, &set_layout_),
+            "vkCreateDescriptorSetLayout failed");
+
+        VkPushConstantRange range{};
+        range.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+        range.size = sizeof(Push);
+
+        VkPipelineLayoutCreateInfo pl{};
+        pl.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+        pl.setLayoutCount = 1;
+        pl.pSetLayouts = &set_layout_;
+        pl.pushConstantRangeCount = 1;
+        pl.pPushConstantRanges = &range;
+        check(
+            vkCreatePipelineLayout(
+                context.device(), &pl, nullptr, &pipeline_layout_),
+            "vkCreatePipelineLayout failed");
+
+        VkPipelineShaderStageCreateInfo stage{};
+        stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+        stage.module = shader;
+        stage.pName = "main";
+
+        VkComputePipelineCreateInfo cp{};
+        cp.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+        cp.stage = stage;
+        cp.layout = pipeline_layout_;
+        check(
+            vkCreateComputePipelines(
+                context.device(),
+                VK_NULL_HANDLE,
+                1,
+                &cp,
+                nullptr,
+                &pipeline_),
+            "vkCreateComputePipelines failed");
+
+        VkDescriptorPoolSize ps{};
+        ps.type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        ps.descriptorCount = 3;
+
+        VkDescriptorPoolCreateInfo dp{};
+        dp.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+        dp.maxSets = 1;
+        dp.poolSizeCount = 1;
+        dp.pPoolSizes = &ps;
+        check(
+            vkCreateDescriptorPool(
+                context.device(), &dp, nullptr, &descriptor_pool_),
+            "vkCreateDescriptorPool failed");
+
+        VkDescriptorSetAllocateInfo da{};
+        da.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        da.descriptorPool = descriptor_pool_;
+        da.descriptorSetCount = 1;
+        da.pSetLayouts = &set_layout_;
+        check(
+            vkAllocateDescriptorSets(
+                context.device(), &da, &descriptor_set_),
+            "vkAllocateDescriptorSets failed");
+
+        VkCommandPoolCreateInfo pci{};
+        pci.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+        pci.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
+        pci.queueFamilyIndex = context.compute_queue_family();
+        check(
+            vkCreateCommandPool(
+                context.device(), &pci, nullptr, &command_pool_),
+            "vkCreateCommandPool failed");
+
+        VkCommandBufferAllocateInfo ai{};
+        ai.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+        ai.commandPool = command_pool_;
+        ai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        ai.commandBufferCount = 1;
+        check(
+            vkAllocateCommandBuffers(
+                context.device(), &ai, &command_buffer_),
+            "vkAllocateCommandBuffers failed");
+
+        VkFenceCreateInfo fi{};
+        fi.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+        check(
+            vkCreateFence(
+                context.device(), &fi, nullptr, &fence_),
+            "vkCreateFence failed");
+    } catch (...) {
+        vkDestroyShaderModule(context.device(), shader, nullptr);
+        cleanup();
+        throw;
+    }
+
+    vkDestroyShaderModule(context.device(), shader, nullptr);
+}
+
+Q8MatVecPipeline::~Q8MatVecPipeline() {
+    cleanup();
+}
+
+void Q8MatVecPipeline::cleanup() noexcept {
+    const auto device = context_.device();
+
+    if (fence_ != VK_NULL_HANDLE) {
+        vkDestroyFence(device, fence_, nullptr);
+        fence_ = VK_NULL_HANDLE;
+    }
+    if (command_pool_ != VK_NULL_HANDLE) {
+        vkDestroyCommandPool(device, command_pool_, nullptr);
+        command_pool_ = VK_NULL_HANDLE;
+        command_buffer_ = VK_NULL_HANDLE;
+    }
+    if (descriptor_pool_ != VK_NULL_HANDLE) {
+        vkDestroyDescriptorPool(device, descriptor_pool_, nullptr);
+        descriptor_pool_ = VK_NULL_HANDLE;
+        descriptor_set_ = VK_NULL_HANDLE;
+    }
+    if (pipeline_ != VK_NULL_HANDLE) {
+        vkDestroyPipeline(device, pipeline_, nullptr);
+        pipeline_ = VK_NULL_HANDLE;
+    }
+    if (pipeline_layout_ != VK_NULL_HANDLE) {
+        vkDestroyPipelineLayout(device, pipeline_layout_, nullptr);
+        pipeline_layout_ = VK_NULL_HANDLE;
+    }
+    if (set_layout_ != VK_NULL_HANDLE) {
+        vkDestroyDescriptorSetLayout(device, set_layout_, nullptr);
+        set_layout_ = VK_NULL_HANDLE;
+    }
+}
+
+void Q8MatVecPipeline::run(
+    Buffer& weights,
+    Buffer& input,
+    Buffer& output,
+    std::uint32_t weight_byte_offset,
+    std::uint32_t input_dim,
+    std::uint32_t output_dim) {
+
+    if (input_dim == 0 || output_dim == 0) {
+        throw std::runtime_error(
+            "Q8MatVecPipeline dimensions must be non-zero");
+    }
+    if ((input_dim % kQ8BlockElements) != 0) {
+        throw std::runtime_error(
+            "Q8MatVecPipeline input_dim must be divisible by 32");
+    }
+    if ((weight_byte_offset & 3u) != 0u) {
+        throw std::runtime_error(
+            "Q8MatVecPipeline weight byte offset must be 4-byte aligned");
+    }
+
+    const std::uint64_t blocks =
+        static_cast<std::uint64_t>(input_dim) / kQ8BlockElements;
+    const std::uint64_t row_bytes =
+        checked_mul(
+            blocks,
+            kQ8BlockBytes,
+            "Q8MatVecPipeline row byte size overflow");
+    const std::uint64_t matrix_bytes =
+        checked_mul(
+            static_cast<std::uint64_t>(output_dim),
+            row_bytes,
+            "Q8MatVecPipeline matrix byte size overflow");
+    const std::uint64_t required_weight_bytes =
+        checked_add(
+            weight_byte_offset,
+            matrix_bytes,
+            "Q8MatVecPipeline weight range overflow");
+
+    const std::uint64_t required_input_bytes =
+        checked_mul(
+            input_dim,
+            sizeof(float),
+            "Q8MatVecPipeline input byte size overflow");
+    const std::uint64_t required_output_bytes =
+        checked_mul(
+            output_dim,
+            sizeof(float),
+            "Q8MatVecPipeline output byte size overflow");
+
+    if (required_weight_bytes > weights.size()) {
+        throw std::runtime_error(
+            "Q8MatVecPipeline weight buffer is too small");
+    }
+    if (required_input_bytes > input.size()) {
+        throw std::runtime_error(
+            "Q8MatVecPipeline input buffer is too small");
+    }
+    if (required_output_bytes > output.size()) {
+        throw std::runtime_error(
+            "Q8MatVecPipeline output buffer is too small");
+    }
+
+    const bool descriptor_changed =
+        bound_weights_ != weights.handle() ||
+        bound_input_ != input.handle() ||
+        bound_output_ != output.handle() ||
+        bound_weights_size_ != weights.size() ||
+        bound_input_size_ != input.size() ||
+        bound_output_size_ != output.size();
+
+    if (descriptor_changed) {
+        std::array<VkDescriptorBufferInfo, 3> infos{{
+            {weights.handle(), 0, weights.size()},
+            {input.handle(), 0, input.size()},
+            {output.handle(), 0, output.size()},
+        }};
+
+        std::array<VkWriteDescriptorSet, 3> writes{};
+        for (std::uint32_t i = 0; i < writes.size(); ++i) {
+            writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            writes[i].dstSet = descriptor_set_;
+            writes[i].dstBinding = i;
+            writes[i].descriptorCount = 1;
+            writes[i].descriptorType =
+                VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            writes[i].pBufferInfo = &infos[i];
+        }
+
+        vkUpdateDescriptorSets(
+            context_.device(),
+            static_cast<std::uint32_t>(writes.size()),
+            writes.data(),
+            0,
+            nullptr);
+
+        bound_weights_ = weights.handle();
+        bound_input_ = input.handle();
+        bound_output_ = output.handle();
+        bound_weights_size_ = weights.size();
+        bound_input_size_ = input.size();
+        bound_output_size_ = output.size();
+    }
+
+    check(
+        vkResetFences(context_.device(), 1, &fence_),
+        "vkResetFences failed");
+    check(
+        vkResetCommandBuffer(command_buffer_, 0),
+        "vkResetCommandBuffer failed");
+
+    VkCommandBufferBeginInfo begin{};
+    begin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    check(
+        vkBeginCommandBuffer(command_buffer_, &begin),
+        "vkBeginCommandBuffer failed");
+
+    vkCmdBindPipeline(
+        command_buffer_,
+        VK_PIPELINE_BIND_POINT_COMPUTE,
+        pipeline_);
+    vkCmdBindDescriptorSets(
+        command_buffer_,
+        VK_PIPELINE_BIND_POINT_COMPUTE,
+        pipeline_layout_,
+        0,
+        1,
+        &descriptor_set_,
+        0,
+        nullptr);
+
+    constexpr std::uint32_t kMaxGroupsX = 65535u;
+    constexpr std::uint32_t kMaxGroupsY = 65535u;
+    const std::uint32_t groups_x =
+        std::min(output_dim, kMaxGroupsX);
+    const std::uint64_t groups_y_64 =
+        (static_cast<std::uint64_t>(output_dim) +
+         groups_x - 1u) /
+        groups_x;
+
+    if (groups_y_64 > kMaxGroupsY) {
+        throw std::runtime_error(
+            "Q8MatVecPipeline output dimension exceeds 2D dispatch capacity");
+    }
+
+    const Push push{
+        weight_byte_offset,
+        input_dim,
+        output_dim,
+        groups_x,
+    };
+
+    vkCmdPushConstants(
+        command_buffer_,
+        pipeline_layout_,
+        VK_SHADER_STAGE_COMPUTE_BIT,
+        0,
+        sizeof(push),
+        &push);
+
+    vkCmdDispatch(
+        command_buffer_,
+        groups_x,
+        static_cast<std::uint32_t>(groups_y_64),
+        1);
+
+    check(
+        vkEndCommandBuffer(command_buffer_),
+        "vkEndCommandBuffer failed");
+
+    VkSubmitInfo submit{};
+    submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submit.commandBufferCount = 1;
+    submit.pCommandBuffers = &command_buffer_;
+
+    check(
+        vkQueueSubmit(
+            context_.compute_queue(), 1, &submit, fence_),
+        "vkQueueSubmit failed");
+    check(
+        vkWaitForFences(
+            context_.device(), 1, &fence_, VK_TRUE, UINT64_MAX),
+        "vkWaitForFences failed");
+}
+
+} // namespace vortexrt
