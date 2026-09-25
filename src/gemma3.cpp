@@ -1341,11 +1341,12 @@ Gemma3SingleTokenResult Gemma3Model::decode_token(
              layer < config_.block_count;
              ++layer) {
 
+            const auto& names =
+                layer_tensor_names_[layer];
+
             rms_norm_into(
                 hidden,
-                layer_tensor(
-                    layer,
-                    "attn_norm.weight"),
+                names.attn_norm,
                 norm_scratch);
             const auto& attn_input =
                 norm_scratch;
@@ -1358,15 +1359,9 @@ Gemma3SingleTokenResult Gemma3Model::decode_token(
                 auto qkv =
                     run_q8_triplet(
                         std::array<std::string, 3>{
-                            layer_tensor(
-                                layer,
-                                "attn_q.weight"),
-                            layer_tensor(
-                                layer,
-                                "attn_k.weight"),
-                            layer_tensor(
-                                layer,
-                                "attn_v.weight"),
+                            names.attn_q,
+                            names.attn_k,
+                            names.attn_v,
                         },
                         attn_input);
 
@@ -1376,36 +1371,26 @@ Gemma3SingleTokenResult Gemma3Model::decode_token(
             } else {
                 query =
                     run_q8_matvec(
-                        layer_tensor(
-                            layer,
-                            "attn_q.weight"),
+                        names.attn_q,
                         attn_input);
                 key =
                     run_q8_matvec(
-                        layer_tensor(
-                            layer,
-                            "attn_k.weight"),
+                        names.attn_k,
                         attn_input);
                 value =
                     run_q8_matvec(
-                        layer_tensor(
-                            layer,
-                            "attn_v.weight"),
+                        names.attn_v,
                         attn_input);
             }
 
             rms_norm_heads_inplace(
                 query,
                 config_.head_count,
-                layer_tensor(
-                    layer,
-                    "attn_q_norm.weight"));
+                names.attn_q_norm);
             rms_norm_heads_inplace(
                 key,
                 config_.head_count_kv,
-                layer_tensor(
-                    layer,
-                    "attn_k_norm.weight"));
+                names.attn_k_norm);
 
             const bool global_layer =
                 is_global_layer(layer);
@@ -1547,16 +1532,12 @@ Gemma3SingleTokenResult Gemma3Model::decode_token(
 
             auto attention_output =
                 run_q8_matvec(
-                    layer_tensor(
-                        layer,
-                        "attn_output.weight"),
+                    names.attn_output,
                     attention);
 
             rms_norm_inplace(
                 attention_output,
-                layer_tensor(
-                    layer,
-                    "post_attention_norm.weight"));
+                names.post_attention_norm);
 
             add_inplace(
                 attention_output,
@@ -1566,9 +1547,7 @@ Gemma3SingleTokenResult Gemma3Model::decode_token(
 
             rms_norm_into(
                 hidden,
-                layer_tensor(
-                    layer,
-                    "ffn_norm.weight"),
+                names.ffn_norm,
                 norm_scratch);
             const auto& ffn_input =
                 norm_scratch;
@@ -1583,17 +1562,11 @@ Gemma3SingleTokenResult Gemma3Model::decode_token(
                 ffn_pipeline.ffn_available()) {
 
                 const auto gate_name =
-                    layer_tensor(
-                        layer,
-                        "ffn_gate.weight");
+                    names.ffn_gate;
                 const auto up_name =
-                    layer_tensor(
-                        layer,
-                        "ffn_up.weight");
+                    names.ffn_up;
                 const auto down_name =
-                    layer_tensor(
-                        layer,
-                        "ffn_down.weight");
+                    names.ffn_down;
 
                 const auto* gate_tensor =
                     require_tensor(
@@ -1669,12 +1642,8 @@ Gemma3SingleTokenResult Gemma3Model::decode_token(
                     auto gate_up =
                         run_q8_pair(
                             std::array<std::string, 2>{
-                                layer_tensor(
-                                    layer,
-                                    "ffn_gate.weight"),
-                                layer_tensor(
-                                    layer,
-                                    "ffn_up.weight"),
+                                names.ffn_gate,
+                                names.ffn_up,
                             },
                             ffn_input);
 
@@ -1683,15 +1652,11 @@ Gemma3SingleTokenResult Gemma3Model::decode_token(
                 } else {
                     gate =
                         run_q8_matvec(
-                            layer_tensor(
-                                layer,
-                                "ffn_gate.weight"),
+                            names.ffn_gate,
                             ffn_input);
                     up =
                         run_q8_matvec(
-                            layer_tensor(
-                                layer,
-                                "ffn_up.weight"),
+                            names.ffn_up,
                             ffn_input);
                 }
 
@@ -1712,17 +1677,13 @@ Gemma3SingleTokenResult Gemma3Model::decode_token(
 
                 ffn_output =
                     run_q8_matvec(
-                        layer_tensor(
-                            layer,
-                            "ffn_down.weight"),
+                        names.ffn_down,
                         gate);
             }
 
             rms_norm_inplace(
                 ffn_output,
-                layer_tensor(
-                    layer,
-                    "post_ffw_norm.weight"));
+                names.post_ffw_norm);
 
             add_inplace(ffn_output, hidden);
             hidden =
