@@ -646,11 +646,49 @@ void VulkanContext::copy_buffer_unlocked(
         vkBeginCommandBuffer(transfer_command_buffer_, &begin),
         "vkBeginCommandBuffer failed for transfer path");
 
+    VkMemoryBarrier before_copy{};
+    before_copy.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+    before_copy.srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT;
+    before_copy.dstAccessMask =
+        VK_ACCESS_TRANSFER_READ_BIT |
+        VK_ACCESS_TRANSFER_WRITE_BIT;
+
+    vkCmdPipelineBarrier(
+        transfer_command_buffer_,
+        VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+        VK_PIPELINE_STAGE_TRANSFER_BIT,
+        0,
+        1,
+        &before_copy,
+        0,
+        nullptr,
+        0,
+        nullptr);
+
     VkBufferCopy region{};
     region.srcOffset = src_offset;
     region.dstOffset = dst_offset;
     region.size = bytes;
     vkCmdCopyBuffer(transfer_command_buffer_, src, dst, 1, &region);
+
+    VkMemoryBarrier after_copy{};
+    after_copy.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+    after_copy.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    after_copy.dstAccessMask =
+        VK_ACCESS_MEMORY_READ_BIT |
+        VK_ACCESS_MEMORY_WRITE_BIT;
+
+    vkCmdPipelineBarrier(
+        transfer_command_buffer_,
+        VK_PIPELINE_STAGE_TRANSFER_BIT,
+        VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+        0,
+        1,
+        &after_copy,
+        0,
+        nullptr,
+        0,
+        nullptr);
 
     vk_check(
         vkEndCommandBuffer(transfer_command_buffer_),
