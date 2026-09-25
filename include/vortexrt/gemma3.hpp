@@ -164,8 +164,18 @@ private:
         std::vector<float>& values,
         std::uint32_t head_count,
         std::uint32_t head_dim,
-        std::uint32_t position,
+        const std::vector<float>& rope_cos,
+        const std::vector<float>& rope_sin);
+
+    [[nodiscard]] static std::vector<float> build_rope_inverse_frequencies(
+        std::uint32_t head_dim,
         float theta);
+
+    static void build_rope_table(
+        const std::vector<float>& inverse_frequencies,
+        std::uint32_t position,
+        std::vector<float>& rope_cos,
+        std::vector<float>& rope_sin);
 
     static void add_inplace(
         std::vector<float>& dst,
@@ -183,6 +193,8 @@ private:
     bool force_q8_lane_override_ = false;
     std::uint32_t narrow_q8_lane_count_ = 64;
 
+    std::vector<float> local_rope_inverse_frequencies_;
+    std::vector<float> global_rope_inverse_frequencies_;
     std::unordered_map<std::string, std::vector<float>> f32_weights_;
     std::unique_ptr<Buffer> weights_arena_;
     std::unique_ptr<Buffer> activation_input_;
