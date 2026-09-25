@@ -162,7 +162,8 @@ int main() {
 
         vortexrt::Q8MatVecPipeline pipeline(
             context,
-            vortexrt::build_config::q8_matvec_spv);
+            vortexrt::build_config::q8_matvec_spv,
+            vortexrt::build_config::q8_matvec_u8_spv);
 
         pipeline.run(
             weights,
@@ -186,6 +187,9 @@ int main() {
 
         std::cout << "Vortex-RT Q8_0 matvec\n";
         std::cout << "  GPU: " << context.capabilities().name << "\n";
+        std::cout << "  Native 8-bit path: "
+                  << (pipeline.using_native_u8() ? "yes" : "no")
+                  << "\n";
         std::cout << "  max abs error: " << max_error << "\n";
 
         if (max_error > 2e-3f) {
