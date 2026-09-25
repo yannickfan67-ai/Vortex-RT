@@ -46,6 +46,11 @@ private:
     VkDeviceSize bound_weights_size_ = 0;
     VkDeviceSize bound_input_size_ = 0;
     VkDeviceSize bound_output_size_ = 0;
+
+    std::uint32_t recorded_weight_byte_offset_ = 0;
+    std::uint32_t recorded_input_dim_ = 0;
+    std::uint32_t recorded_output_dim_ = 0;
+    bool command_recording_valid_ = false;
 };
 
 } // namespace vortexrt
