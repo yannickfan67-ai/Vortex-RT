@@ -228,9 +228,9 @@ int main(int argc, char** argv) {
                     << ": id=" << token.token_id
                     << " logit="
                     << token.logit
-                    << " piece=""
+                    << " piece=\""
                     << escape_piece(token.piece)
-                    << ""\n";
+                    << "\"\n";
             }
         }
 
