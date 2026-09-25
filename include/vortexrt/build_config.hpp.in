@@ -12,6 +12,14 @@ inline constexpr const char* q8_matvec_32_spv =
     R"VORTEX(@Q8_MATVEC_32_SPV@)VORTEX";
 inline constexpr const char* q8_matvec_u8_32_spv =
     R"VORTEX(@Q8_MATVEC_U8_32_SPV@)VORTEX";
+inline constexpr const char* q8_matvec_16_spv =
+    R"VORTEX(@Q8_MATVEC_16_SPV@)VORTEX";
+inline constexpr const char* q8_matvec_u8_16_spv =
+    R"VORTEX(@Q8_MATVEC_U8_16_SPV@)VORTEX";
+inline constexpr const char* q8_matvec_8_spv =
+    R"VORTEX(@Q8_MATVEC_8_SPV@)VORTEX";
+inline constexpr const char* q8_matvec_u8_8_spv =
+    R"VORTEX(@Q8_MATVEC_U8_8_SPV@)VORTEX";
 inline constexpr const char* argmax_spv =
     R"VORTEX(@ARGMAX_SPV@)VORTEX";
 inline constexpr const char* gelu_mul_spv =
