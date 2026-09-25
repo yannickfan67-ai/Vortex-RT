@@ -4,8 +4,10 @@
 
 #include <vulkan/vulkan.h>
 
+#include <cstddef>
 #include <cstdint>
 #include <string>
+#include <unordered_map>
 
 namespace vortexrt {
 
@@ -28,7 +30,22 @@ public:
         std::uint32_t output_dim);
 
 private:
+    struct DispatchKey {
+        std::uint32_t weight_byte_offset = 0;
+        std::uint32_t input_dim = 0;
+        std::uint32_t output_dim = 0;
+
+        bool operator==(const DispatchKey&) const noexcept = default;
+    };
+
+    struct DispatchKeyHash {
+        std::size_t operator()(const DispatchKey& key) const noexcept;
+    };
+
     void cleanup() noexcept;
+
+    [[nodiscard]] VkCommandBuffer get_or_record_command(
+        const DispatchKey& key);
 
     VulkanContext& context_;
     VkDescriptorSetLayout set_layout_ = VK_NULL_HANDLE;
@@ -37,7 +54,6 @@ private:
     VkDescriptorPool descriptor_pool_ = VK_NULL_HANDLE;
     VkDescriptorSet descriptor_set_ = VK_NULL_HANDLE;
     VkCommandPool command_pool_ = VK_NULL_HANDLE;
-    VkCommandBuffer command_buffer_ = VK_NULL_HANDLE;
     VkFence fence_ = VK_NULL_HANDLE;
 
     VkBuffer bound_weights_ = VK_NULL_HANDLE;
@@ -47,10 +63,10 @@ private:
     VkDeviceSize bound_input_size_ = 0;
     VkDeviceSize bound_output_size_ = 0;
 
-    std::uint32_t recorded_weight_byte_offset_ = 0;
-    std::uint32_t recorded_input_dim_ = 0;
-    std::uint32_t recorded_output_dim_ = 0;
-    bool command_recording_valid_ = false;
+    std::unordered_map<
+        DispatchKey,
+        VkCommandBuffer,
+        DispatchKeyHash> command_cache_;
 };
 
 } // namespace vortexrt
