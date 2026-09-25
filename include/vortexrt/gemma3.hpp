@@ -217,6 +217,8 @@ private:
     std::unique_ptr<Q8MatVecPipeline> q8_pipeline_narrow_;
     std::unique_ptr<ArgmaxPipeline> argmax_pipeline_;
     Gemma3Config config_{};
+    float embedding_scale_ = 1.0f;
+    float attention_scale_ = 1.0f;
     bool fuse_projections_ = true;
     bool force_q8_lane_override_ = false;
     std::uint32_t narrow_q8_lane_count_ = 64;
@@ -224,6 +226,7 @@ private:
     std::vector<float> local_rope_inverse_frequencies_;
     std::vector<float> global_rope_inverse_frequencies_;
 
+    const GgufTensorInfo* token_embedding_tensor_ = nullptr;
     const GgufValue* tokenizer_tokens_ = nullptr;
     std::unordered_map<std::string_view, TokenizerEntry> tokenizer_pieces_;
     std::array<std::uint32_t, 256> tokenizer_byte_tokens_{};
