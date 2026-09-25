@@ -180,6 +180,7 @@ private:
     std::unique_ptr<ArgmaxPipeline> argmax_pipeline_;
     Gemma3Config config_{};
     bool fuse_projections_ = true;
+    bool force_q8_lane_override_ = false;
     std::uint32_t narrow_q8_lane_count_ = 64;
 
     std::unordered_map<std::string, std::vector<float>> f32_weights_;
