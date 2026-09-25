@@ -2,6 +2,7 @@ name: build
 
 on:
   push:
+    branches: [main]
   pull_request:
   workflow_dispatch:
 
@@ -39,9 +40,22 @@ jobs:
       - name: Run Vulkan smoke tests
         run: ctest --test-dir build --output-on-failure
 
+      - name: Cache Gemma 3 270M Q8_0
+        id: gemma-cache
+        uses: actions/cache@v4
+        with:
+          path: gemma-3-270m-Q8_0.gguf
+          key: gemma-3-270m-q8-0-e00cf79514204dfe
+
       - name: Download Gemma 3 270M Q8_0
+        if: steps.gemma-cache.outputs.cache-hit != 'true'
         run: |
-          curl -L --fail --retry 3 --retry-delay 2             -o gemma-3-270m-Q8_0.gguf             "https://huggingface.co/ggml-org/gemma-3-270m-GGUF/resolve/main/gemma-3-270m-Q8_0.gguf?download=true"
+          curl -L --fail --retry 3 --retry-delay 2 \
+            -o gemma-3-270m-Q8_0.gguf \
+            "https://huggingface.co/ggml-org/gemma-3-270m-GGUF/resolve/main/gemma-3-270m-Q8_0.gguf?download=true"
+
+      - name: Verify Gemma checksum
+        run: |
           echo "e00cf79514204dfe2f4d6943f277ffea7fd8a4c8e955b4b7a869cfc157694881  gemma-3-270m-Q8_0.gguf" | sha256sum -c -
 
       - name: Parse and validate GGUF
