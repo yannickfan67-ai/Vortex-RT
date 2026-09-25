@@ -56,7 +56,12 @@ public:
         const std::string& argmax_spirv = {},
         const std::string& q8_matvec_32_spirv = {},
         const std::string& q8_matvec_u8_32_spirv = {},
-        const std::string& gelu_mul_spirv = {});
+        const std::string& gelu_mul_spirv = {},
+        const std::string& q8_matvec_16_spirv = {},
+        const std::string& q8_matvec_u8_16_spirv = {},
+        const std::string& q8_matvec_8_spirv = {},
+        const std::string& q8_matvec_u8_8_spirv = {},
+        std::uint32_t q8_lane_override = 0);
 
     [[nodiscard]] const Gemma3Config& config() const noexcept {
         return config_;
@@ -71,7 +76,7 @@ public:
     }
 
     [[nodiscard]] std::uint32_t narrow_q8_lane_count() const noexcept {
-        return q8_pipeline_32_ ? 32u : 64u;
+        return narrow_q8_lane_count_;
     }
 
     [[nodiscard]] bool fused_ffn_enabled() const noexcept {
@@ -166,10 +171,11 @@ private:
     GgufFile gguf_;
     VulkanContext& context_;
     Q8MatVecPipeline q8_pipeline_;
-    std::unique_ptr<Q8MatVecPipeline> q8_pipeline_32_;
+    std::unique_ptr<Q8MatVecPipeline> q8_pipeline_narrow_;
     std::unique_ptr<ArgmaxPipeline> argmax_pipeline_;
     Gemma3Config config_{};
     bool fuse_projections_ = true;
+    std::uint32_t narrow_q8_lane_count_ = 64;
 
     std::unordered_map<std::string, std::vector<float>> f32_weights_;
     std::unique_ptr<Buffer> weights_arena_;
