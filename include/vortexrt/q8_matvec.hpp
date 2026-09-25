@@ -112,6 +112,21 @@ private:
         std::size_t operator()(const DispatchKey& key) const noexcept;
     };
 
+    struct FfnDispatchKey {
+        std::uint32_t gate_weight_byte_offset = 0;
+        std::uint32_t up_weight_byte_offset = 0;
+        std::uint32_t down_weight_byte_offset = 0;
+        std::uint32_t input_dim = 0;
+        std::uint32_t ffn_dim = 0;
+        std::uint32_t output_dim = 0;
+
+        bool operator==(const FfnDispatchKey&) const noexcept = default;
+    };
+
+    struct FfnDispatchKeyHash {
+        std::size_t operator()(const FfnDispatchKey& key) const noexcept;
+    };
+
     void cleanup() noexcept;
 
     [[nodiscard]] VkCommandBuffer get_or_record_command(
@@ -147,7 +162,6 @@ private:
     VkCommandPool command_pool_ = VK_NULL_HANDLE;
     VkCommandBuffer staged_command_ = VK_NULL_HANDLE;
     VkCommandBuffer triplet_command_ = VK_NULL_HANDLE;
-    VkCommandBuffer ffn_command_ = VK_NULL_HANDLE;
     VkFence fence_ = VK_NULL_HANDLE;
 
     VkBuffer bound_weights_ = VK_NULL_HANDLE;
@@ -183,6 +197,11 @@ private:
         DispatchKey,
         VkCommandBuffer,
         DispatchKeyHash> command_cache_;
+
+    std::unordered_map<
+        FfnDispatchKey,
+        VkCommandBuffer,
+        FfnDispatchKeyHash> ffn_command_cache_;
 };
 
 } // namespace vortexrt
