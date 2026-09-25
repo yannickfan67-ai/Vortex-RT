@@ -1,5 +1,6 @@
 #pragma once
 
+#include "vortexrt/argmax.hpp"
 #include "vortexrt/gguf.hpp"
 #include "vortexrt/q8_matvec.hpp"
 
@@ -50,7 +51,8 @@ public:
         const std::string& gguf_path,
         VulkanContext& context,
         const std::string& q8_matvec_spirv,
-        const std::string& q8_matvec_u8_spirv = {});
+        const std::string& q8_matvec_u8_spirv = {},
+        const std::string& argmax_spirv = {});
 
     [[nodiscard]] const Gemma3Config& config() const noexcept {
         return config_;
@@ -85,6 +87,10 @@ private:
     };
 
     [[nodiscard]] std::vector<float> run_q8_matvec(
+        const std::string& tensor_name,
+        const std::vector<float>& input);
+
+    [[nodiscard]] std::size_t run_q8_matvec_to_output(
         const std::string& tensor_name,
         const std::vector<float>& input);
 
@@ -129,6 +135,7 @@ private:
     GgufFile gguf_;
     VulkanContext& context_;
     Q8MatVecPipeline q8_pipeline_;
+    std::unique_ptr<ArgmaxPipeline> argmax_pipeline_;
     Gemma3Config config_{};
 
     std::unordered_map<std::string, std::vector<float>> f32_weights_;
