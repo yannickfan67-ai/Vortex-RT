@@ -842,8 +842,12 @@ void Q8MatVecPipeline::run_staged(
         throw std::runtime_error(
             "Q8MatVecPipeline::run_staged received null host input");
     }
-    const bool readback = host_output != nullptr;
-    if (input_dim == 0 || output_dim == 0) {
+
+    const bool readback =
+        host_output != nullptr;
+
+    if (input_dim == 0 ||
+        output_dim == 0) {
         throw std::runtime_error(
             "Q8MatVecPipeline dimensions must be non-zero");
     }
@@ -866,7 +870,8 @@ void Q8MatVecPipeline::run_staged(
             "Q8MatVecPipeline row byte size overflow");
     const std::uint64_t matrix_bytes =
         checked_mul(
-            static_cast<std::uint64_t>(output_dim),
+            static_cast<std::uint64_t>(
+                output_dim),
             row_bytes,
             "Q8MatVecPipeline matrix byte size overflow");
     const std::uint64_t required_weight_bytes =
@@ -893,20 +898,23 @@ void Q8MatVecPipeline::run_staged(
     }
     if (required_input_bytes > staging_input.size() ||
         (readback &&
-         required_output_bytes > staging_output.size())) {
+         required_output_bytes >
+             staging_output.size())) {
         throw std::runtime_error(
             "Q8MatVecPipeline staging buffer is too small");
     }
     if (host_input_bytes < required_input_bytes ||
         (readback &&
-         host_output_bytes < required_output_bytes)) {
+         host_output_bytes <
+             required_output_bytes)) {
         throw std::runtime_error(
             "Q8MatVecPipeline host buffer is too small");
     }
 
     staging_input.upload(
         host_input,
-        static_cast<std::size_t>(required_input_bytes));
+        static_cast<std::size_t>(
+            required_input_bytes));
 
     const bool descriptor_changed =
         bound_weights_ != weights.handle() ||
@@ -916,210 +924,307 @@ void Q8MatVecPipeline::run_staged(
         bound_input_size_ != input.size() ||
         bound_output_size_ != output.size();
 
-    if (descriptor_changed) {
-        std::array<VkDescriptorBufferInfo, 3> infos{{
-            {weights.handle(), 0, weights.size()},
-            {input.handle(), 0, input.size()},
-            {output.handle(), 0, output.size()},
-        }};
+    const bool staging_buffers_changed =
+        staged_bound_staging_input_ !=
+            staging_input.handle() ||
+        staged_bound_staging_output_ !=
+            staging_output.handle();
 
-        std::array<VkWriteDescriptorSet, 3> writes{};
-        for (std::uint32_t i = 0; i < writes.size(); ++i) {
+    if (descriptor_changed) {
+        std::array<VkDescriptorBufferInfo, 3>
+            infos{{
+                {
+                    weights.handle(),
+                    0,
+                    weights.size(),
+                },
+                {
+                    input.handle(),
+                    0,
+                    input.size(),
+                },
+                {
+                    output.handle(),
+                    0,
+                    output.size(),
+                },
+            }};
+
+        std::array<VkWriteDescriptorSet, 3>
+            writes{};
+
+        for (std::uint32_t i = 0;
+             i < writes.size();
+             ++i) {
             writes[i].sType =
                 VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-            writes[i].dstSet = descriptor_set_;
+            writes[i].dstSet =
+                descriptor_set_;
             writes[i].dstBinding = i;
             writes[i].descriptorCount = 1;
             writes[i].descriptorType =
                 VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-            writes[i].pBufferInfo = &infos[i];
+            writes[i].pBufferInfo =
+                &infos[i];
         }
 
         vkUpdateDescriptorSets(
             context_.device(),
-            static_cast<std::uint32_t>(writes.size()),
+            static_cast<std::uint32_t>(
+                writes.size()),
             writes.data(),
             0,
             nullptr);
 
-        bound_weights_ = weights.handle();
-        bound_input_ = input.handle();
-        bound_output_ = output.handle();
-        bound_weights_size_ = weights.size();
-        bound_input_size_ = input.size();
-        bound_output_size_ = output.size();
+        bound_weights_ =
+            weights.handle();
+        bound_input_ =
+            input.handle();
+        bound_output_ =
+            output.handle();
+        bound_weights_size_ =
+            weights.size();
+        bound_input_size_ =
+            input.size();
+        bound_output_size_ =
+            output.size();
     }
 
-    if (staged_command_ == VK_NULL_HANDLE) {
-        VkCommandBufferAllocateInfo ai{};
-        ai.sType =
-            VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-        ai.commandPool = command_pool_;
-        ai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-        ai.commandBufferCount = 1;
-        check(
-            vkAllocateCommandBuffers(
-                context_.device(),
-                &ai,
-                &staged_command_),
-            "vkAllocateCommandBuffers failed for staged Q8 path");
+    if (descriptor_changed ||
+        staging_buffers_changed) {
+        clear_staged_command_cache();
+        staged_bound_staging_input_ =
+            staging_input.handle();
+        staged_bound_staging_output_ =
+            staging_output.handle();
     }
 
-    check(
-        vkResetCommandBuffer(staged_command_, 0),
-        "vkResetCommandBuffer failed for staged Q8 path");
-
-    VkCommandBufferBeginInfo begin{};
-    begin.sType =
-        VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-    begin.flags =
-        VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-    check(
-        vkBeginCommandBuffer(staged_command_, &begin),
-        "vkBeginCommandBuffer failed for staged Q8 path");
-
-    VkBufferCopy input_copy{};
-    input_copy.size =
-        static_cast<VkDeviceSize>(required_input_bytes);
-    vkCmdCopyBuffer(
-        staged_command_,
-        staging_input.handle(),
-        input.handle(),
-        1,
-        &input_copy);
-
-    VkMemoryBarrier input_barrier{};
-    input_barrier.sType =
-        VK_STRUCTURE_TYPE_MEMORY_BARRIER;
-    input_barrier.srcAccessMask =
-        VK_ACCESS_TRANSFER_WRITE_BIT;
-    input_barrier.dstAccessMask =
-        VK_ACCESS_SHADER_READ_BIT;
-    vkCmdPipelineBarrier(
-        staged_command_,
-        VK_PIPELINE_STAGE_TRANSFER_BIT,
-        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-        0,
-        1,
-        &input_barrier,
-        0,
-        nullptr,
-        0,
-        nullptr);
-
-    vkCmdBindPipeline(
-        staged_command_,
-        VK_PIPELINE_BIND_POINT_COMPUTE,
-        pipeline_);
-    vkCmdBindDescriptorSets(
-        staged_command_,
-        VK_PIPELINE_BIND_POINT_COMPUTE,
-        pipeline_layout_,
-        0,
-        1,
-        &descriptor_set_,
-        0,
-        nullptr);
-
-    constexpr std::uint32_t kMaxGroupsX = 65535u;
-    constexpr std::uint32_t kMaxGroupsY = 65535u;
-    const std::uint32_t groups_x =
-        std::min(output_dim, kMaxGroupsX);
-    const std::uint64_t groups_y_64 =
-        (static_cast<std::uint64_t>(output_dim) +
-         groups_x - 1u) /
-        groups_x;
-    if (groups_y_64 > kMaxGroupsY) {
-        throw std::runtime_error(
-            "Q8MatVecPipeline output dimension exceeds 2D dispatch capacity");
-    }
-
-    const Push push{
+    const StagedDispatchKey key{
         weight_byte_offset,
         input_dim,
         output_dim,
-        groups_x,
+        readback,
     };
-    vkCmdPushConstants(
-        staged_command_,
-        pipeline_layout_,
-        VK_SHADER_STAGE_COMPUTE_BIT,
-        0,
-        sizeof(push),
-        &push);
 
-    vkCmdDispatch(
-        staged_command_,
-        groups_x,
-        static_cast<std::uint32_t>(groups_y_64),
-        1);
+    VkCommandBuffer command =
+        VK_NULL_HANDLE;
 
-    VkMemoryBarrier output_barrier{};
-    output_barrier.sType =
-        VK_STRUCTURE_TYPE_MEMORY_BARRIER;
-    output_barrier.srcAccessMask =
-        VK_ACCESS_SHADER_WRITE_BIT;
-    output_barrier.dstAccessMask =
-        readback
-            ? VK_ACCESS_TRANSFER_READ_BIT
-            : VK_ACCESS_SHADER_READ_BIT;
-    vkCmdPipelineBarrier(
-        staged_command_,
-        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-        readback
-            ? VK_PIPELINE_STAGE_TRANSFER_BIT
-            : VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-        0,
-        1,
-        &output_barrier,
-        0,
-        nullptr,
-        0,
-        nullptr);
+    if (const auto it =
+            staged_command_cache_.find(key);
+        it != staged_command_cache_.end()) {
+        command =
+            it->second;
+    } else {
+        VkCommandBufferAllocateInfo allocate{};
+        allocate.sType =
+            VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+        allocate.commandPool =
+            command_pool_;
+        allocate.level =
+            VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        allocate.commandBufferCount = 1;
 
-    if (readback) {
-        VkBufferCopy output_copy{};
-        output_copy.size =
-            static_cast<VkDeviceSize>(required_output_bytes);
-        vkCmdCopyBuffer(
-            staged_command_,
-            output.handle(),
-            staging_output.handle(),
-            1,
-            &output_copy);
+        check(
+            vkAllocateCommandBuffers(
+                context_.device(),
+                &allocate,
+                &command),
+            "vkAllocateCommandBuffers failed for cached staged Q8 path");
 
-        VkMemoryBarrier host_barrier{};
-        host_barrier.sType =
-            VK_STRUCTURE_TYPE_MEMORY_BARRIER;
-        host_barrier.srcAccessMask =
-            VK_ACCESS_TRANSFER_WRITE_BIT;
-        host_barrier.dstAccessMask =
-            VK_ACCESS_HOST_READ_BIT;
-        vkCmdPipelineBarrier(
-            staged_command_,
-            VK_PIPELINE_STAGE_TRANSFER_BIT,
-            VK_PIPELINE_STAGE_HOST_BIT,
-            0,
-            1,
-            &host_barrier,
-            0,
-            nullptr,
-            0,
-            nullptr);
+        try {
+            VkCommandBufferBeginInfo begin{};
+            begin.sType =
+                VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+            begin.flags =
+                VK_COMMAND_BUFFER_USAGE_SIMULTANEOUS_USE_BIT;
+
+            check(
+                vkBeginCommandBuffer(
+                    command,
+                    &begin),
+                "vkBeginCommandBuffer failed for cached staged Q8 path");
+
+            VkBufferCopy input_copy{};
+            input_copy.size =
+                static_cast<VkDeviceSize>(
+                    required_input_bytes);
+
+            vkCmdCopyBuffer(
+                command,
+                staging_input.handle(),
+                input.handle(),
+                1,
+                &input_copy);
+
+            VkMemoryBarrier input_barrier{};
+            input_barrier.sType =
+                VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+            input_barrier.srcAccessMask =
+                VK_ACCESS_TRANSFER_WRITE_BIT;
+            input_barrier.dstAccessMask =
+                VK_ACCESS_SHADER_READ_BIT;
+
+            vkCmdPipelineBarrier(
+                command,
+                VK_PIPELINE_STAGE_TRANSFER_BIT,
+                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                0,
+                1,
+                &input_barrier,
+                0,
+                nullptr,
+                0,
+                nullptr);
+
+            vkCmdBindPipeline(
+                command,
+                VK_PIPELINE_BIND_POINT_COMPUTE,
+                pipeline_);
+            vkCmdBindDescriptorSets(
+                command,
+                VK_PIPELINE_BIND_POINT_COMPUTE,
+                pipeline_layout_,
+                0,
+                1,
+                &descriptor_set_,
+                0,
+                nullptr);
+
+            constexpr std::uint32_t
+                kMaxGroupsX = 65535u;
+            constexpr std::uint32_t
+                kMaxGroupsY = 65535u;
+
+            const std::uint32_t groups_x =
+                std::min(
+                    output_dim,
+                    kMaxGroupsX);
+            const std::uint64_t groups_y_64 =
+                (static_cast<std::uint64_t>(
+                     output_dim) +
+                 groups_x - 1u) /
+                groups_x;
+
+            if (groups_y_64 >
+                kMaxGroupsY) {
+                throw std::runtime_error(
+                    "Q8MatVecPipeline output dimension exceeds 2D dispatch capacity");
+            }
+
+            const Push push{
+                weight_byte_offset,
+                input_dim,
+                output_dim,
+                groups_x,
+            };
+
+            vkCmdPushConstants(
+                command,
+                pipeline_layout_,
+                VK_SHADER_STAGE_COMPUTE_BIT,
+                0,
+                sizeof(push),
+                &push);
+
+            vkCmdDispatch(
+                command,
+                groups_x,
+                static_cast<std::uint32_t>(
+                    groups_y_64),
+                1);
+
+            VkMemoryBarrier output_barrier{};
+            output_barrier.sType =
+                VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+            output_barrier.srcAccessMask =
+                VK_ACCESS_SHADER_WRITE_BIT;
+            output_barrier.dstAccessMask =
+                readback
+                    ? VK_ACCESS_TRANSFER_READ_BIT
+                    : VK_ACCESS_SHADER_READ_BIT;
+
+            vkCmdPipelineBarrier(
+                command,
+                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                readback
+                    ? VK_PIPELINE_STAGE_TRANSFER_BIT
+                    : VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                0,
+                1,
+                &output_barrier,
+                0,
+                nullptr,
+                0,
+                nullptr);
+
+            if (readback) {
+                VkBufferCopy output_copy{};
+                output_copy.size =
+                    static_cast<VkDeviceSize>(
+                        required_output_bytes);
+
+                vkCmdCopyBuffer(
+                    command,
+                    output.handle(),
+                    staging_output.handle(),
+                    1,
+                    &output_copy);
+
+                VkMemoryBarrier host_barrier{};
+                host_barrier.sType =
+                    VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+                host_barrier.srcAccessMask =
+                    VK_ACCESS_TRANSFER_WRITE_BIT;
+                host_barrier.dstAccessMask =
+                    VK_ACCESS_HOST_READ_BIT;
+
+                vkCmdPipelineBarrier(
+                    command,
+                    VK_PIPELINE_STAGE_TRANSFER_BIT,
+                    VK_PIPELINE_STAGE_HOST_BIT,
+                    0,
+                    1,
+                    &host_barrier,
+                    0,
+                    nullptr,
+                    0,
+                    nullptr);
+            }
+
+            check(
+                vkEndCommandBuffer(
+                    command),
+                "vkEndCommandBuffer failed for cached staged Q8 path");
+
+            staged_command_cache_.emplace(
+                key,
+                command);
+        } catch (...) {
+            if (command !=
+                VK_NULL_HANDLE) {
+                vkFreeCommandBuffers(
+                    context_.device(),
+                    command_pool_,
+                    1,
+                    &command);
+            }
+            throw;
+        }
     }
 
     check(
-        vkEndCommandBuffer(staged_command_),
-        "vkEndCommandBuffer failed for staged Q8 path");
-
-    check(
-        vkResetFences(context_.device(), 1, &fence_),
+        vkResetFences(
+            context_.device(),
+            1,
+            &fence_),
         "vkResetFences failed");
 
     VkSubmitInfo submit{};
-    submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submit.sType =
+        VK_STRUCTURE_TYPE_SUBMIT_INFO;
     submit.commandBufferCount = 1;
-    submit.pCommandBuffers = &staged_command_;
+    submit.pCommandBuffers =
+        &command;
 
     check(
         vkQueueSubmit(
@@ -1127,7 +1232,8 @@ void Q8MatVecPipeline::run_staged(
             1,
             &submit,
             fence_),
-        "vkQueueSubmit failed for staged Q8 path");
+        "vkQueueSubmit failed for cached staged Q8 path");
+
     check(
         vkWaitForFences(
             context_.device(),
@@ -1135,12 +1241,13 @@ void Q8MatVecPipeline::run_staged(
             &fence_,
             VK_TRUE,
             UINT64_MAX),
-        "vkWaitForFences failed for staged Q8 path");
+        "vkWaitForFences failed for cached staged Q8 path");
 
     if (readback) {
         staging_output.download(
             host_output,
-            static_cast<std::size_t>(required_output_bytes));
+            static_cast<std::size_t>(
+                required_output_bytes));
     }
 }
 
