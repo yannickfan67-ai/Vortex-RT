@@ -4,6 +4,7 @@
 
 #include <vulkan/vulkan.h>
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <string>
@@ -48,6 +49,20 @@ public:
         std::uint32_t input_dim,
         std::uint32_t output_dim);
 
+    void run_staged_triplet(
+        Buffer& weights,
+        Buffer& input,
+        Buffer& output,
+        Buffer& staging_input,
+        Buffer& staging_output,
+        const void* host_input,
+        std::size_t host_input_bytes,
+        void* host_output,
+        std::size_t host_output_bytes,
+        const std::array<std::uint32_t, 3>& weight_byte_offsets,
+        std::uint32_t input_dim,
+        const std::array<std::uint32_t, 3>& output_dims);
+
 private:
     struct DispatchKey {
         std::uint32_t weight_byte_offset = 0;
@@ -73,8 +88,14 @@ private:
     VkPipeline pipeline_ = VK_NULL_HANDLE;
     VkDescriptorPool descriptor_pool_ = VK_NULL_HANDLE;
     VkDescriptorSet descriptor_set_ = VK_NULL_HANDLE;
+    std::array<VkDescriptorSet, 3> triplet_sets_{
+        VK_NULL_HANDLE,
+        VK_NULL_HANDLE,
+        VK_NULL_HANDLE,
+    };
     VkCommandPool command_pool_ = VK_NULL_HANDLE;
     VkCommandBuffer staged_command_ = VK_NULL_HANDLE;
+    VkCommandBuffer triplet_command_ = VK_NULL_HANDLE;
     VkFence fence_ = VK_NULL_HANDLE;
 
     VkBuffer bound_weights_ = VK_NULL_HANDLE;
