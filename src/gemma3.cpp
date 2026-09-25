@@ -727,9 +727,10 @@ std::array<std::vector<float>, 3> Gemma3Model::run_q8_triplet(
     return result;
 }
 
-std::vector<float> Gemma3Model::rms_norm(
+void Gemma3Model::rms_norm_into(
     const std::vector<float>& input,
-    const std::string& weight_name) const {
+    const std::string& weight_name,
+    std::vector<float>& output) const {
 
     const auto cached =
         f32_weights_.find(weight_name);
@@ -737,7 +738,8 @@ std::vector<float> Gemma3Model::rms_norm(
         throw std::runtime_error(
             "Uncached RMSNorm tensor: " + weight_name);
     }
-    const auto& weights = cached->second;
+    const auto& weights =
+        cached->second;
 
     if (weights.size() != input.size()) {
         throw std::runtime_error(
@@ -753,25 +755,77 @@ std::vector<float> Gemma3Model::rms_norm(
 
     const double mean_square =
         sum_squares /
-        static_cast<double>(input.size());
+        static_cast<double>(
+            input.size());
     const float scale =
         1.0f /
         std::sqrt(
-            static_cast<float>(mean_square) +
+            static_cast<float>(
+                mean_square) +
             config_.rms_epsilon);
 
-    std::vector<float> output(input.size());
-    for (std::size_t i = 0; i < input.size(); ++i) {
+    output.resize(
+        input.size());
+
+    for (std::size_t i = 0;
+         i < input.size();
+         ++i) {
         // Gemma GGUF conversion already folds the original
         // (1 + weight) RMSNorm convention into stored weights.
         output[i] =
-            input[i] * scale * weights[i];
+            input[i] *
+            scale *
+            weights[i];
     }
-    return output;
 }
 
-std::vector<float> Gemma3Model::rms_norm_heads(
-    const std::vector<float>& input,
+void Gemma3Model::rms_norm_inplace(
+    std::vector<float>& values,
+    const std::string& weight_name) const {
+
+    const auto cached =
+        f32_weights_.find(weight_name);
+    if (cached == f32_weights_.end()) {
+        throw std::runtime_error(
+            "Uncached RMSNorm tensor: " + weight_name);
+    }
+    const auto& weights =
+        cached->second;
+
+    if (weights.size() != values.size()) {
+        throw std::runtime_error(
+            "RMSNorm shape mismatch: " + weight_name);
+    }
+
+    double sum_squares = 0.0;
+    for (const float value : values) {
+        sum_squares +=
+            static_cast<double>(value) *
+            static_cast<double>(value);
+    }
+
+    const double mean_square =
+        sum_squares /
+        static_cast<double>(
+            values.size());
+    const float scale =
+        1.0f /
+        std::sqrt(
+            static_cast<float>(
+                mean_square) +
+            config_.rms_epsilon);
+
+    for (std::size_t i = 0;
+         i < values.size();
+         ++i) {
+        values[i] *=
+            scale *
+            weights[i];
+    }
+}
+
+void Gemma3Model::rms_norm_heads_inplace(
+    std::vector<float>& values,
     std::uint32_t head_count,
     const std::string& weight_name) const {
 
@@ -781,30 +835,32 @@ std::vector<float> Gemma3Model::rms_norm_heads(
         throw std::runtime_error(
             "Uncached Q/K RMSNorm tensor: " + weight_name);
     }
-    const auto& weights = cached->second;
+    const auto& weights =
+        cached->second;
 
     if (weights.size() != config_.head_dim ||
-        input.size() !=
-            static_cast<std::size_t>(head_count) *
+        values.size() !=
+            static_cast<std::size_t>(
+                head_count) *
             config_.head_dim) {
         throw std::runtime_error(
             "Q/K RMSNorm shape mismatch: " + weight_name);
     }
 
-    std::vector<float> output(input.size());
-
     for (std::uint32_t head = 0;
          head < head_count;
          ++head) {
         const std::size_t base =
-            static_cast<std::size_t>(head) *
+            static_cast<std::size_t>(
+                head) *
             config_.head_dim;
 
         double sum_squares = 0.0;
         for (std::uint32_t i = 0;
              i < config_.head_dim;
              ++i) {
-            const float value = input[base + i];
+            const float value =
+                values[base + i];
             sum_squares +=
                 static_cast<double>(value) *
                 static_cast<double>(value);
@@ -822,14 +878,11 @@ std::vector<float> Gemma3Model::rms_norm_heads(
         for (std::uint32_t i = 0;
              i < config_.head_dim;
              ++i) {
-            output[base + i] =
-                input[base + i] *
+            values[base + i] *=
                 scale *
                 weights[i];
         }
     }
-
-    return output;
 }
 
 std::vector<float> Gemma3Model::token_embedding(
