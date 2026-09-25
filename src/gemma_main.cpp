@@ -170,7 +170,9 @@ int main(int argc, char** argv) {
             context,
             vortexrt::build_config::q8_matvec_spv,
             vortexrt::build_config::q8_matvec_u8_spv,
-            vortexrt::build_config::argmax_spv);
+            vortexrt::build_config::argmax_spv,
+            vortexrt::build_config::q8_matvec_32_spv,
+            vortexrt::build_config::q8_matvec_u8_32_spv);
 
         const auto model_ready =
             std::chrono::steady_clock::now();
