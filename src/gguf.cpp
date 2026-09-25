@@ -391,6 +391,64 @@ GgufFile::GgufFile(const std::filesystem::path& path)
 
     data_offset_ = align_up(reader.position(), alignment_);
     validate();
+
+    payload_stream_.open(
+        path_,
+        std::ios::binary);
+    if (!payload_stream_) {
+        throw std::runtime_error(
+            "Failed to open GGUF payload stream: " +
+            path_.string());
+    }
+}
+
+void GgufFile::read_bytes_at(
+    std::uint64_t absolute_offset,
+    void* destination,
+    std::size_t bytes) const {
+
+    if (bytes == 0) {
+        return;
+    }
+    if (destination == nullptr) {
+        throw std::runtime_error(
+            "GGUF payload read received null destination");
+    }
+    if (absolute_offset > file_size_ ||
+        bytes >
+            file_size_ - absolute_offset ||
+        bytes >
+            static_cast<std::size_t>(
+                std::numeric_limits<
+                    std::streamsize>::max())) {
+        throw std::runtime_error(
+            "GGUF payload read lies outside file");
+    }
+
+    std::lock_guard<std::mutex> lock(
+        payload_stream_mutex_);
+
+    payload_stream_.clear();
+    payload_stream_.seekg(
+        static_cast<std::streamoff>(
+            absolute_offset),
+        std::ios::beg);
+
+    if (!payload_stream_) {
+        throw std::runtime_error(
+            "Failed to seek GGUF payload stream");
+    }
+
+    payload_stream_.read(
+        reinterpret_cast<char*>(
+            destination),
+        static_cast<std::streamsize>(
+            bytes));
+
+    if (!payload_stream_) {
+        throw std::runtime_error(
+            "Failed to read GGUF payload stream");
+    }
 }
 
 const GgufValue* GgufFile::find_metadata(const std::string& key) const noexcept {
@@ -452,28 +510,14 @@ std::vector<std::byte> GgufFile::read_tensor_bytes(
             tensor.name);
     }
 
-    std::ifstream stream(path_, std::ios::binary);
-    if (!stream) {
-        throw std::runtime_error(
-            "Failed to reopen GGUF file: " + path_.string());
-    }
+    std::vector<std::byte> data(
+        static_cast<std::size_t>(
+            *bytes));
 
-    stream.seekg(static_cast<std::streamoff>(absolute), std::ios::beg);
-    if (!stream) {
-        throw std::runtime_error(
-            "Failed to seek to GGUF tensor: " + tensor.name);
-    }
-
-    std::vector<std::byte> data(static_cast<std::size_t>(*bytes));
-    if (!data.empty()) {
-        stream.read(
-            reinterpret_cast<char*>(data.data()),
-            static_cast<std::streamsize>(data.size()));
-        if (!stream) {
-            throw std::runtime_error(
-                "Failed to read GGUF tensor: " + tensor.name);
-        }
-    }
+    read_bytes_at(
+        absolute,
+        data.data(),
+        data.size());
 
     return data;
 }
@@ -563,22 +607,14 @@ std::vector<float> GgufFile::read_q8_0_row(
             tensor.name);
     }
 
-    std::ifstream stream(path_, std::ios::binary);
-    if (!stream) {
-        throw std::runtime_error(
-            "Failed to reopen GGUF file: " + path_.string());
-    }
-    stream.seekg(static_cast<std::streamoff>(absolute), std::ios::beg);
-
     std::vector<std::uint8_t> encoded(
-        static_cast<std::size_t>(row_bytes));
-    stream.read(
-        reinterpret_cast<char*>(encoded.data()),
-        static_cast<std::streamsize>(encoded.size()));
-    if (!stream) {
-        throw std::runtime_error(
-            "Failed to read Q8_0 row: " + tensor.name);
-    }
+        static_cast<std::size_t>(
+            row_bytes));
+
+    read_bytes_at(
+        absolute,
+        encoded.data(),
+        encoded.size());
 
     std::vector<float> values(static_cast<std::size_t>(width));
     for (std::uint64_t block = 0; block < blocks; ++block) {
