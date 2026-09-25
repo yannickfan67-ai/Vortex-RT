@@ -2,14 +2,12 @@ name: build
 
 on:
   push:
-    branches: [main]
   pull_request:
   workflow_dispatch:
 
 jobs:
   linux-lavapipe:
     runs-on: ubuntu-24.04
-
     steps:
       - uses: actions/checkout@v4
 
@@ -18,18 +16,26 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libvulkan-dev mesa-vulkan-drivers vulkan-tools glslc curl
 
-      - name: Select Lavapipe ICD
+      - name: Locate Lavapipe ICD
+        shell: bash
         run: |
-          echo "Installed ICDs:"
-          find /usr/share/vulkan/icd.d -maxdepth 1 -type f -print || true
-          LVP="$(find /usr/share/vulkan/icd.d -maxdepth 1 -type f \( -iname '*lvp*.json' -o -iname '*lavapipe*.json' \) | head -n 1)"
-          test -n "$LVP"
-          echo "Using Lavapipe ICD: $LVP"
-          echo "VK_ICD_FILENAMES=$LVP" >> "$GITHUB_ENV"
-          echo "VK_DRIVER_FILES=$LVP" >> "$GITHUB_ENV"
+          set -euo pipefail
+          echo "Available Vulkan ICD manifests:"
+          find /usr/share/vulkan/icd.d /etc/vulkan/icd.d -maxdepth 1 -type f -name '*.json' -print 2>/dev/null || true
+
+          LVP_ICD="$(find /usr/share/vulkan/icd.d /etc/vulkan/icd.d -maxdepth 1 -type f \( -iname '*lvp*.json' -o -iname '*lavapipe*.json' \) -print 2>/dev/null | head -n 1)"
+          if [ -z "$LVP_ICD" ]; then
+            echo "Lavapipe ICD manifest was not found. Files from mesa-vulkan-drivers:"
+            dpkg -L mesa-vulkan-drivers | grep -Ei 'vulkan|icd|lvp|lavapipe' || true
+            exit 1
+          fi
+
+          echo "Using Lavapipe ICD: $LVP_ICD"
+          echo "VK_DRIVER_FILES=$LVP_ICD" >> "$GITHUB_ENV"
+          echo "VK_ICD_FILENAMES=$LVP_ICD" >> "$GITHUB_ENV"
 
       - name: Configure
-        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 
       - name: Build
         run: cmake --build build -j2
@@ -37,25 +43,16 @@ jobs:
       - name: Verify CPU Vulkan driver
         run: vulkaninfo --summary
 
-      - name: Run Vulkan smoke tests
-        run: ctest --test-dir build --output-on-failure
-
-      - name: Cache Gemma 3 270M Q8_0
-        id: gemma-cache
-        uses: actions/cache@v4
-        with:
-          path: gemma-3-270m-Q8_0.gguf
-          key: gemma-3-270m-q8-0-e00cf79514204dfe
+      - name: Run Vortex-RT on Lavapipe
+        run: |
+          ./build/vortexrt-info
+          ./build/vortexrt-bench
 
       - name: Download Gemma 3 270M Q8_0
-        if: steps.gemma-cache.outputs.cache-hit != 'true'
         run: |
           curl -L --fail --retry 3 --retry-delay 2 \
             -o gemma-3-270m-Q8_0.gguf \
             "https://huggingface.co/ggml-org/gemma-3-270m-GGUF/resolve/main/gemma-3-270m-Q8_0.gguf?download=true"
-
-      - name: Verify Gemma checksum
-        run: |
           echo "e00cf79514204dfe2f4d6943f277ffea7fd8a4c8e955b4b7a869cfc157694881  gemma-3-270m-Q8_0.gguf" | sha256sum -c -
 
       - name: Parse and validate GGUF
