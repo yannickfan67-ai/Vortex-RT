@@ -922,43 +922,372 @@ Gemma3SingleTokenResult Gemma3Model::run_single_token(
     return result;
 }
 
-Gemma3GenerationResult Gemma3Model::generate_greedy_from_bos(
+std::vector<std::uint32_t> Gemma3Model::tokenize(
+    const std::string& text,
+    bool add_bos) const {
+
+    const auto* tokens =
+        gguf_.find_metadata("tokenizer.ggml.tokens");
+    const auto* scores =
+        gguf_.find_metadata("tokenizer.ggml.scores");
+    const auto* types =
+        gguf_.find_metadata("tokenizer.ggml.token_type");
+
+    if (tokens == nullptr ||
+        scores == nullptr ||
+        types == nullptr ||
+        !tokens->is_array() ||
+        !scores->is_array() ||
+        !types->is_array() ||
+        tokens->array.size() != config_.vocab_size ||
+        scores->array.size() != config_.vocab_size ||
+        types->array.size() != config_.vocab_size) {
+        throw std::runtime_error(
+            "Gemma 3 GGUF tokenizer metadata is incomplete");
+    }
+
+    struct TokenEntry {
+        std::uint32_t id = 0;
+        float score = 0.0f;
+    };
+
+    std::unordered_map<std::string, TokenEntry> pieces;
+    pieces.reserve(config_.vocab_size);
+
+    std::vector<std::uint32_t> byte_tokens(
+        256,
+        std::numeric_limits<std::uint32_t>::max());
+
+    std::size_t max_piece_bytes = 0;
+
+    const auto hex_value = [](char ch) -> int {
+        if (ch >= '0' && ch <= '9') {
+            return ch - '0';
+        }
+        if (ch >= 'a' && ch <= 'f') {
+            return ch - 'a' + 10;
+        }
+        if (ch >= 'A' && ch <= 'F') {
+            return ch - 'A' + 10;
+        }
+        return -1;
+    };
+
+    for (std::uint32_t id = 0;
+         id < config_.vocab_size;
+         ++id) {
+        const auto piece =
+            tokens->array[id].as_string();
+        const auto score_value =
+            scores->array[id].as_f64();
+        const auto type_value =
+            types->array[id].as_i64();
+
+        if (!piece || !score_value || !type_value) {
+            continue;
+        }
+
+        const int type =
+            static_cast<int>(*type_value);
+
+        if (type == 6 &&
+            piece->size() == 6 &&
+            (*piece)[0] == '<' &&
+            (*piece)[1] == '0' &&
+            (*piece)[2] == 'x' &&
+            (*piece)[5] == '>') {
+            const int hi =
+                hex_value((*piece)[3]);
+            const int lo =
+                hex_value((*piece)[4]);
+            if (hi >= 0 && lo >= 0) {
+                byte_tokens[
+                    static_cast<std::size_t>(
+                        (hi << 4) | lo)] = id;
+            }
+            continue;
+        }
+
+        if (type != 1 && type != 4) {
+            continue;
+        }
+
+        const float score =
+            static_cast<float>(*score_value);
+        const auto existing =
+            pieces.find(*piece);
+        if (existing == pieces.end() ||
+            score > existing->second.score) {
+            pieces[*piece] =
+                TokenEntry{id, score};
+        }
+
+        max_piece_bytes =
+            std::max(
+                max_piece_bytes,
+                piece->size());
+    }
+
+    bool add_space_prefix = false;
+    if (const auto* setting =
+            gguf_.find_metadata(
+                "tokenizer.ggml.add_space_prefix");
+        setting != nullptr) {
+        add_space_prefix =
+            setting->as_bool().value_or(false);
+    }
+
+    const std::string marker = "▁";
+    std::string normalized;
+    normalized.reserve(
+        text.size() + marker.size());
+
+    bool previous_space = false;
+    for (const unsigned char ch : text) {
+        const bool is_space =
+            ch == ' ' ||
+            ch == '\t' ||
+            ch == '\r' ||
+            ch == '\n';
+
+        if (is_space) {
+            if (!previous_space) {
+                normalized += marker;
+                previous_space = true;
+            }
+        } else {
+            normalized.push_back(
+                static_cast<char>(ch));
+            previous_space = false;
+        }
+    }
+
+    if (add_space_prefix &&
+        !normalized.empty() &&
+        normalized.rfind(marker, 0) != 0) {
+        normalized.insert(0, marker);
+    }
+
+    const float negative_infinity =
+        -std::numeric_limits<float>::infinity();
+
+    std::vector<float> best(
+        normalized.size() + 1,
+        negative_infinity);
+    std::vector<std::size_t> previous(
+        normalized.size() + 1,
+        std::numeric_limits<std::size_t>::max());
+    std::vector<std::uint32_t> previous_token(
+        normalized.size() + 1,
+        std::numeric_limits<std::uint32_t>::max());
+
+    best[0] = 0.0f;
+
+    const auto unk =
+        gguf_.metadata_u64(
+            "tokenizer.ggml.unknown_token_id")
+            .value_or(3);
+
+    for (std::size_t position = 0;
+         position < normalized.size();
+         ++position) {
+        if (!std::isfinite(best[position])) {
+            continue;
+        }
+
+        bool matched = false;
+        const std::size_t limit =
+            std::min(
+                max_piece_bytes,
+                normalized.size() - position);
+
+        for (std::size_t length = 1;
+             length <= limit;
+             ++length) {
+            const auto it =
+                pieces.find(
+                    normalized.substr(
+                        position,
+                        length));
+            if (it == pieces.end()) {
+                continue;
+            }
+
+            matched = true;
+            const std::size_t next =
+                position + length;
+            const float candidate =
+                best[position] +
+                it->second.score;
+
+            if (candidate > best[next]) {
+                best[next] = candidate;
+                previous[next] = position;
+                previous_token[next] =
+                    it->second.id;
+            }
+        }
+
+        if (!matched) {
+            const auto byte =
+                static_cast<unsigned char>(
+                    normalized[position]);
+            std::uint32_t token =
+                byte_tokens[byte];
+
+            if (token ==
+                std::numeric_limits<std::uint32_t>::max()) {
+                token =
+                    static_cast<std::uint32_t>(
+                        std::min<std::uint64_t>(
+                            unk,
+                            config_.vocab_size - 1u));
+            }
+
+            const std::size_t next =
+                position + 1;
+            const float candidate =
+                best[position] - 100.0f;
+
+            if (candidate > best[next]) {
+                best[next] = candidate;
+                previous[next] = position;
+                previous_token[next] = token;
+            }
+        }
+    }
+
+    if (!normalized.empty() &&
+        !std::isfinite(best.back())) {
+        throw std::runtime_error(
+            "Gemma 3 tokenizer could not segment prompt");
+    }
+
+    std::vector<std::uint32_t> reversed;
+    std::size_t cursor = normalized.size();
+
+    while (cursor != 0) {
+        if (previous[cursor] ==
+                std::numeric_limits<std::size_t>::max() ||
+            previous_token[cursor] ==
+                std::numeric_limits<std::uint32_t>::max()) {
+            throw std::runtime_error(
+                "Gemma 3 tokenizer backtracking failed");
+        }
+
+        reversed.push_back(
+            previous_token[cursor]);
+        cursor = previous[cursor];
+    }
+
+    std::reverse(
+        reversed.begin(),
+        reversed.end());
+
+    std::vector<std::uint32_t> output;
+    output.reserve(
+        reversed.size() + (add_bos ? 1u : 0u));
+
+    if (add_bos) {
+        const auto bos =
+            gguf_.metadata_u64(
+                "tokenizer.ggml.bos_token_id")
+                .value_or(2);
+        if (bos >= config_.vocab_size) {
+            throw std::runtime_error(
+                "Gemma 3 BOS token id is out of range");
+        }
+        output.push_back(
+            static_cast<std::uint32_t>(bos));
+    }
+
+    output.insert(
+        output.end(),
+        reversed.begin(),
+        reversed.end());
+
+    return output;
+}
+
+Gemma3GenerationResult Gemma3Model::generate_greedy(
+    const std::string& prompt,
     std::size_t max_new_tokens) {
 
     reset_cache();
 
     Gemma3GenerationResult generated{};
-    std::uint32_t current_token = 2;
+    if (max_new_tokens == 0) {
+        return generated;
+    }
+
+    const auto prompt_tokens =
+        tokenize(prompt, true);
+    if (prompt_tokens.empty()) {
+        throw std::runtime_error(
+            "Gemma 3 prompt produced no input tokens");
+    }
+
+    Gemma3SingleTokenResult decoded{};
+    std::uint32_t position = 0;
+
+    for (std::size_t i = 0;
+         i < prompt_tokens.size();
+         ++i) {
+        const bool last =
+            i + 1 == prompt_tokens.size();
+
+        decoded =
+            decode_token(
+                prompt_tokens[i],
+                position++,
+                last ? 1u : 0u);
+    }
+
+    const auto eos =
+        gguf_.metadata_u64(
+            "tokenizer.ggml.eos_token_id")
+            .value_or(1);
+
+    std::uint32_t current_token = 0;
 
     for (std::size_t i = 0;
          i < max_new_tokens;
          ++i) {
-        const auto decoded =
-            decode_token(
-                current_token,
-                static_cast<std::uint32_t>(i),
-                1);
+        if (i != 0) {
+            decoded =
+                decode_token(
+                    current_token,
+                    position++,
+                    1);
+        }
 
         if (decoded.top_tokens.empty()) {
             throw std::runtime_error(
                 "Gemma 3 greedy sampler received no logits");
         }
 
-        const std::uint32_t next_token =
+        current_token =
             decoded.top_tokens.front().token_id;
+        generated.token_ids.push_back(
+            current_token);
 
-        generated.token_ids.push_back(next_token);
-
-        if (next_token == 1) {
+        if (current_token == eos) {
             break;
         }
 
         generated.text +=
-            decode_piece(next_token);
-        current_token = next_token;
+            decode_piece(current_token);
     }
 
     return generated;
+}
+
+Gemma3GenerationResult Gemma3Model::generate_greedy_from_bos(
+    std::size_t max_new_tokens) {
+
+    return generate_greedy(
+        std::string{},
+        max_new_tokens);
 }
 
 } // namespace vortexrt
