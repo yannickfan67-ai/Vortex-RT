@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <chrono>
 #include <cstdint>
 #include <cstdlib>
 #include <exception>
@@ -155,13 +156,29 @@ int main(int argc, char** argv) {
         const Options options =
             parse_options(argc, argv);
 
+        const auto runtime_start =
+            std::chrono::steady_clock::now();
+
         vortexrt::VulkanContext context(
             options.device);
+
+        const auto model_start =
+            std::chrono::steady_clock::now();
 
         vortexrt::Gemma3Model model(
             options.model_path,
             context,
             vortexrt::build_config::q8_matvec_spv);
+
+        const auto model_ready =
+            std::chrono::steady_clock::now();
+
+        const double model_load_ms =
+            std::chrono::duration<double, std::milli>(
+                model_ready - model_start).count();
+        const double runtime_setup_ms =
+            std::chrono::duration<double, std::milli>(
+                model_ready - runtime_start).count();
 
         const auto& config = model.config();
 
@@ -183,7 +200,11 @@ int main(int argc, char** argv) {
             << "  Sliding window: "
             << config.sliding_window << "\n"
             << "  Vocab: "
-            << config.vocab_size << "\n";
+            << config.vocab_size << "\n"
+            << "  Model load: "
+            << model_load_ms << " ms\n"
+            << "  Runtime setup: "
+            << runtime_setup_ms << " ms\n";
 
         if (options.generate_tokens != 0) {
             std::cout
@@ -200,6 +221,9 @@ int main(int argc, char** argv) {
             }
             std::cout << "\n";
 
+            const auto generation_start =
+                std::chrono::steady_clock::now();
+
             const auto generated =
                 options.prompt.empty()
                     ? model.generate_greedy_from_bos(
@@ -208,6 +232,18 @@ int main(int argc, char** argv) {
                           options.prompt,
                           options.generate_tokens);
 
+            const auto generation_end =
+                std::chrono::steady_clock::now();
+            const double generation_ms =
+                std::chrono::duration<double, std::milli>(
+                    generation_end - generation_start).count();
+            const double tokens_per_second =
+                generation_ms > 0.0
+                    ? (static_cast<double>(
+                           generated.token_ids.size()) *
+                       1000.0 / generation_ms)
+                    : 0.0;
+
             std::cout << "  Generated token ids:";
             for (const auto id : generated.token_ids) {
                 std::cout << " " << id;
@@ -215,6 +251,10 @@ int main(int argc, char** argv) {
             std::cout << "\n";
 
             std::cout
+                << "  Generation time: "
+                << generation_ms << " ms\n"
+                << "  Throughput: "
+                << tokens_per_second << " tok/s\n"
                 << "  Generated text: \""
                 << escape_piece(generated.text)
                 << "\"\n"
@@ -228,10 +268,19 @@ int main(int argc, char** argv) {
         std::cout
             << "  Token: " << options.token_id << "\n";
 
+        const auto forward_start =
+            std::chrono::steady_clock::now();
+
         const auto result =
             model.run_single_token(
                 options.token_id,
                 options.top_k);
+
+        const auto forward_end =
+            std::chrono::steady_clock::now();
+        const double forward_ms =
+            std::chrono::duration<double, std::milli>(
+                forward_end - forward_start).count();
 
         double checksum = 0.0;
         double sum_squares = 0.0;
@@ -266,6 +315,8 @@ int main(int argc, char** argv) {
                     result.hidden.size()));
 
         std::cout
+            << "  Forward time: "
+            << forward_ms << " ms\n"
             << "  Final hidden RMS: "
             << rms << "\n"
             << "  Final hidden max abs: "
