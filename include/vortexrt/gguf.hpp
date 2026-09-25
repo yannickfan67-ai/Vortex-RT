@@ -3,6 +3,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <fstream>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -103,6 +105,11 @@ public:
     void validate() const;
 
 private:
+    void read_bytes_at(
+        std::uint64_t absolute_offset,
+        void* destination,
+        std::size_t bytes) const;
+
     std::filesystem::path path_;
     std::uint32_t version_ = 0;
     std::uint64_t file_size_ = 0;
@@ -113,6 +120,8 @@ private:
     std::vector<GgufTensorInfo> tensors_;
     std::unordered_map<std::string, std::size_t> metadata_index_;
     std::unordered_map<std::string, std::size_t> tensor_index_;
+    mutable std::mutex payload_stream_mutex_;
+    mutable std::ifstream payload_stream_;
 };
 
 [[nodiscard]] const char* gguf_value_type_name(GgufValueType type) noexcept;
