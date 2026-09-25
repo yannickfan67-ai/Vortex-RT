@@ -186,6 +186,8 @@ private:
     VkBuffer ffn_bound_weights_ = VK_NULL_HANDLE;
     VkBuffer ffn_bound_input_ = VK_NULL_HANDLE;
     VkBuffer ffn_bound_workspace_ = VK_NULL_HANDLE;
+    VkBuffer ffn_bound_staging_input_ = VK_NULL_HANDLE;
+    VkBuffer ffn_bound_staging_output_ = VK_NULL_HANDLE;
     std::uint32_t ffn_bound_input_dim_ = 0;
     std::uint32_t ffn_bound_ffn_dim_ = 0;
     std::uint32_t ffn_bound_output_dim_ = 0;
