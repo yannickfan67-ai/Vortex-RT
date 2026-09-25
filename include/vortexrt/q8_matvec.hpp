@@ -125,6 +125,30 @@ private:
         std::size_t operator()(const StagedDispatchKey& key) const noexcept;
     };
 
+    struct PairDispatchKey {
+        std::array<std::uint32_t, 2> weight_byte_offsets{};
+        std::uint32_t input_dim = 0;
+        std::array<std::uint32_t, 2> output_dims{};
+
+        bool operator==(const PairDispatchKey&) const noexcept = default;
+    };
+
+    struct PairDispatchKeyHash {
+        std::size_t operator()(const PairDispatchKey& key) const noexcept;
+    };
+
+    struct TripletDispatchKey {
+        std::array<std::uint32_t, 3> weight_byte_offsets{};
+        std::uint32_t input_dim = 0;
+        std::array<std::uint32_t, 3> output_dims{};
+
+        bool operator==(const TripletDispatchKey&) const noexcept = default;
+    };
+
+    struct TripletDispatchKeyHash {
+        std::size_t operator()(const TripletDispatchKey& key) const noexcept;
+    };
+
     struct FfnDispatchKey {
         std::uint32_t gate_weight_byte_offset = 0;
         std::uint32_t up_weight_byte_offset = 0;
@@ -146,6 +170,8 @@ private:
         const DispatchKey& key);
 
     void clear_staged_command_cache() noexcept;
+    void clear_pair_command_cache() noexcept;
+    void clear_triplet_command_cache() noexcept;
 
     VulkanContext& context_;
     bool using_native_u8_ = false;
@@ -222,6 +248,16 @@ private:
         StagedDispatchKey,
         VkCommandBuffer,
         StagedDispatchKeyHash> staged_command_cache_;
+
+    std::unordered_map<
+        PairDispatchKey,
+        VkCommandBuffer,
+        PairDispatchKeyHash> pair_command_cache_;
+
+    std::unordered_map<
+        TripletDispatchKey,
+        VkCommandBuffer,
+        TripletDispatchKeyHash> triplet_command_cache_;
 
     std::unordered_map<
         FfnDispatchKey,
