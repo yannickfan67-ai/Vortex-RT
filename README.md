@@ -19,6 +19,8 @@ The runtime foundation is now usable rather than just a compile-only bring-up:
 - SPIR-V compute pipeline helper
 - vector-add correctness/performance benchmark
 - GGUF v2/v3 metadata + tensor-directory parser
+- Vulkan-native Q8_0 matvec smoke kernel with CPU-reference validation
+- explicit transfer/compute memory dependencies for cross-driver correctness
 - Gemma 3 270M Q8_0 GGUF validation in CI
 - Lavapipe CPU-Vulkan smoke tests in GitHub Actions
 
@@ -123,7 +125,7 @@ The CI path downloads the published Gemma 3 270M Q8_0 GGUF and checks that its t
 4. FP16 vector/tensor primitives
 5. subgroup + shared-memory tiled GEMM
 6. RMSNorm, RoPE, SiLU and fused SwiGLU
-7. Q8_0 dequantization + quantized matvec/GEMM
+7. Q8_0 matvec bring-up — **done**; optimize/deploy GGUF-backed quantized GEMM next
 8. Transformer execution + KV cache
 9. Q4/K-quants and fused attention
 10. continuous batching and OpenAI-compatible API
