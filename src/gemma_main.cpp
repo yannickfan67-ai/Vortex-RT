@@ -168,7 +168,8 @@ int main(int argc, char** argv) {
         vortexrt::Gemma3Model model(
             options.model_path,
             context,
-            vortexrt::build_config::q8_matvec_spv);
+            vortexrt::build_config::q8_matvec_spv,
+            vortexrt::build_config::q8_matvec_u8_spv);
 
         const auto model_ready =
             std::chrono::steady_clock::now();
