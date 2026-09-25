@@ -128,6 +128,8 @@ private:
     Gemma3Config config_{};
 
     std::unordered_map<std::string, CachedQ8Weight> q8_weights_;
+    std::unique_ptr<Buffer> activation_input_;
+    std::unique_ptr<Buffer> activation_output_;
     std::vector<LayerKvCache> kv_cache_;
     std::uint32_t next_position_ = 0;
 };
