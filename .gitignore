@@ -1,0 +1,9 @@
+build/
+out/
+.cache/
+.vscode/
+.idea/
+*.user
+*.suo
+*.spv
+CMakePresets.json
