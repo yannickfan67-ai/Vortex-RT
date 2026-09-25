@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.24)
 
-project(VortexRT VERSION 0.1.0 LANGUAGES CXX)
+project(VortexRT VERSION 0.2.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -71,3 +71,12 @@ add_dependencies(vortexrt-bench vortexrt_shaders)
 
 add_executable(vortexrt-gguf-info src/gguf_main.cpp)
 target_link_libraries(vortexrt-gguf-info PRIVATE vortexrt)
+
+include(CTest)
+if(BUILD_TESTING)
+    add_test(NAME vortexrt-info COMMAND vortexrt-info)
+    add_test(
+        NAME vortexrt-bench-smoke
+        COMMAND vortexrt-bench --elements 65536 --repetitions 2
+    )
+endif()
