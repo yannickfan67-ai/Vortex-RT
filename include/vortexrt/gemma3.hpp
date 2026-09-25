@@ -10,6 +10,7 @@
 #include <deque>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 
@@ -133,6 +134,11 @@ private:
         std::string ffn_down;
     };
 
+    struct TokenizerEntry {
+        std::uint32_t id = 0;
+        float score = 0.0f;
+    };
+
     [[nodiscard]] Q8MatVecPipeline& q8_pipeline_for(
         std::size_t input_dim) noexcept;
 
@@ -217,6 +223,16 @@ private:
 
     std::vector<float> local_rope_inverse_frequencies_;
     std::vector<float> global_rope_inverse_frequencies_;
+
+    const GgufValue* tokenizer_tokens_ = nullptr;
+    std::unordered_map<std::string_view, TokenizerEntry> tokenizer_pieces_;
+    std::array<std::uint32_t, 256> tokenizer_byte_tokens_{};
+    std::size_t tokenizer_max_piece_bytes_ = 0;
+    std::uint32_t tokenizer_unk_id_ = 3;
+    std::uint32_t tokenizer_bos_id_ = 2;
+    std::uint32_t tokenizer_eos_id_ = 1;
+    bool tokenizer_add_space_prefix_ = false;
+
     std::unordered_map<std::string, std::vector<float>> f32_weights_;
     std::unique_ptr<Buffer> weights_arena_;
     std::unique_ptr<Buffer> activation_input_;
