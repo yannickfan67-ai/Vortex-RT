@@ -84,6 +84,14 @@ jobs:
           grep -q "Top logits:" gemma-forward-report.txt
           grep -q "Validation: OK" gemma-forward-report.txt
 
+      - name: Generate real Gemma 3 text with KV cache
+        run: |
+          ./build/vortexrt-gemma gemma-3-270m-Q8_0.gguf --generate 4 | tee gemma-generation-report.txt
+          grep -q "Generated token ids:" gemma-generation-report.txt
+          grep -q "TEXT_BEGIN" gemma-generation-report.txt
+          grep -q "TEXT_END" gemma-generation-report.txt
+          grep -q "Validation: OK" gemma-generation-report.txt
+
       - name: Upload model reports
         if: always()
         uses: actions/upload-artifact@v4
@@ -92,4 +100,5 @@ jobs:
           path: |
             gguf-report.txt
             gemma-forward-report.txt
+            gemma-generation-report.txt
           if-no-files-found: ignore
