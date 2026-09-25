@@ -19,10 +19,15 @@ The runtime foundation is now usable rather than just a compile-only bring-up:
 - SPIR-V compute pipeline helper
 - vector-add correctness/performance benchmark
 - GGUF v2/v3 metadata + tensor-directory parser
-- Vulkan-native Q8_0 matvec smoke kernel with CPU-reference validation
+- Vulkan-native Q8_0 matvec with native 8-bit-storage fast path and CPU-reference validation
+- fused Q/K/V and FFN gate/up projection submits with packed-output reference tests
 - explicit transfer/compute memory dependencies for cross-driver correctness
-- Gemma 3 270M Q8_0 GGUF validation in CI
-- Lavapipe CPU-Vulkan smoke tests in GitHub Actions
+- device-local GGUF weight arena and reusable activation/staging buffers
+- Gemma 3 270M decoder with RMSNorm, Q/K norm, RoPE, local/global attention and KV cache
+- GGUF SentencePiece-style prompt tokenization + prompt prefill
+- tied LM head with GPU greedy argmax; full top-k diagnostic path remains available
+- real Gemma 3 270M Q8_0 text generation in CI on Lavapipe CPU Vulkan
+- load / forward / generation timing and tokens-per-second reporting
 
 ## Goals
 
@@ -77,6 +82,7 @@ cmake --build build -j
 ./build/vortexrt-info
 ./build/vortexrt-bench
 ./build/vortexrt-gguf-info model.gguf
+./build/vortexrt-gemma model.gguf --prompt "Hello" --generate 16
 ```
 
 Run the small Vulkan smoke suite with:
@@ -117,18 +123,49 @@ The reported bandwidth is **logical kernel bandwidth** (bytes requested by the v
 
 The CI path downloads the published Gemma 3 270M Q8_0 GGUF and checks that its tokenizer metadata and tensor table are readable.
 
+## Gemma 3 270M inference
+
+The current end-to-end decoder target is the published **Gemma 3 270M Q8_0 GGUF**. This path is implemented by Vortex-RT itself; llama.cpp is not linked into the runtime.
+
+Greedy generation from BOS:
+
+```bash
+./build/vortexrt-gemma gemma-3-270m-Q8_0.gguf --generate 16
+```
+
+Tokenize and prefill a text prompt before generation:
+
+```bash
+./build/vortexrt-gemma gemma-3-270m-Q8_0.gguf --prompt "Hello" --generate 16
+```
+
+Inspect a single-token forward pass and the full top logits:
+
+```bash
+./build/vortexrt-gemma gemma-3-270m-Q8_0.gguf --token-id 2 --top-k 8
+```
+
+Select a specific Vulkan device when needed:
+
+```bash
+./build/vortexrt-gemma gemma-3-270m-Q8_0.gguf --device 1 --prompt "Hello" --generate 16
+```
+
+The CLI reports model-load time, forward/generation time and generation throughput. GitHub Actions also runs the real model on Mesa Lavapipe and verifies deterministic token generation, prompt prefilling and the fused Q8 projection paths.
+
 ## Performance roadmap
 
 1. Runtime bring-up and profiling — **done**
-2. Device-local allocator + persistent staging arena — **done**
+2. Device-local allocator + persistent staging — **done**
 3. GGUF metadata/tensor parsing + real-model CI — **done**
-4. FP16 vector/tensor primitives
-5. subgroup + shared-memory tiled GEMM
-6. RMSNorm, RoPE, SiLU and fused SwiGLU
-7. Q8_0 matvec bring-up — **done**; optimize/deploy GGUF-backed quantized GEMM next
-8. Transformer execution + KV cache
-9. Q4/K-quants and fused attention
-10. continuous batching and OpenAI-compatible API
+4. Q8_0 Vulkan matvec + native 8-bit-storage path — **done**
+5. Gemma 3 270M Transformer execution + KV cache — **done**
+6. Prompt tokenizer / prefill / greedy sampling — **done**
+7. Reduce dispatch and transfer overhead with projection fusion — **in progress**
+8. Subgroup-aware Q8/GEMM tuning and fused normalization/activation — **in progress**
+9. GPU-resident KV cache + fused attention
+10. FP16 GEMM, Q4/K-quants and broader model coverage
+11. continuous batching and OpenAI-compatible API
 
 ## License
 
