@@ -47,6 +47,7 @@ Buffer::Buffer(
         allocation_ = context_.allocate_buffer_memory(
             requirements,
             memory_properties_);
+        memory_properties_ = allocation_.properties;
 
         vk_check(
             vkBindBufferMemory(
