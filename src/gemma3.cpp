@@ -1274,16 +1274,33 @@ Gemma3SingleTokenResult Gemma3Model::decode_token(
             global_rope_cos,
             global_rope_sin);
 
+        std::vector<float> norm_scratch;
+        norm_scratch.reserve(
+            config_.embedding_length);
+
+        std::vector<float> attention;
+        attention.reserve(
+            static_cast<std::size_t>(
+                config_.head_count) *
+            config_.value_dim);
+
+        std::vector<float> scores;
+        scores.reserve(
+            static_cast<std::size_t>(
+                position) + 1u);
+
         for (std::uint32_t layer = 0;
              layer < config_.block_count;
              ++layer) {
 
-            const auto attn_input =
-                rms_norm(
-                    hidden,
-                    layer_tensor(
-                        layer,
-                        "attn_norm.weight"));
+            rms_norm_into(
+                hidden,
+                layer_tensor(
+                    layer,
+                    "attn_norm.weight"),
+                norm_scratch);
+            const auto& attn_input =
+                norm_scratch;
 
             std::vector<float> query;
             std::vector<float> key;
@@ -1329,20 +1346,18 @@ Gemma3SingleTokenResult Gemma3Model::decode_token(
                         attn_input);
             }
 
-            query =
-                rms_norm_heads(
-                    query,
-                    config_.head_count,
-                    layer_tensor(
-                        layer,
-                        "attn_q_norm.weight"));
-            key =
-                rms_norm_heads(
-                    key,
-                    config_.head_count_kv,
-                    layer_tensor(
-                        layer,
-                        "attn_k_norm.weight"));
+            rms_norm_heads_inplace(
+                query,
+                config_.head_count,
+                layer_tensor(
+                    layer,
+                    "attn_q_norm.weight"));
+            rms_norm_heads_inplace(
+                key,
+                config_.head_count_kv,
+                layer_tensor(
+                    layer,
+                    "attn_k_norm.weight"));
 
             const bool global_layer =
                 is_global_layer(layer);
@@ -1395,13 +1410,14 @@ Gemma3SingleTokenResult Gemma3Model::decode_token(
                     static_cast<float>(
                         config_.head_dim));
 
-            std::vector<float> attention(
+            attention.assign(
                 static_cast<std::size_t>(
                     config_.head_count) *
-                config_.value_dim,
+                    config_.value_dim,
                 0.0f);
 
-            std::vector<float> scores(history);
+            scores.resize(
+                history);
 
             for (std::uint32_t head = 0;
                  head < config_.head_count;
@@ -1488,12 +1504,11 @@ Gemma3SingleTokenResult Gemma3Model::decode_token(
                         "attn_output.weight"),
                     attention);
 
-            attention_output =
-                rms_norm(
-                    attention_output,
-                    layer_tensor(
-                        layer,
-                        "post_attention_norm.weight"));
+            rms_norm_inplace(
+                attention_output,
+                layer_tensor(
+                    layer,
+                    "post_attention_norm.weight"));
 
             add_inplace(
                 attention_output,
@@ -1501,12 +1516,14 @@ Gemma3SingleTokenResult Gemma3Model::decode_token(
             hidden =
                 std::move(attention_output);
 
-            const auto ffn_input =
-                rms_norm(
-                    hidden,
-                    layer_tensor(
-                        layer,
-                        "ffn_norm.weight"));
+            rms_norm_into(
+                hidden,
+                layer_tensor(
+                    layer,
+                    "ffn_norm.weight"),
+                norm_scratch);
+            const auto& ffn_input =
+                norm_scratch;
 
             std::vector<float> ffn_output;
 
@@ -1653,12 +1670,11 @@ Gemma3SingleTokenResult Gemma3Model::decode_token(
                         gate);
             }
 
-            ffn_output =
-                rms_norm(
-                    ffn_output,
-                    layer_tensor(
-                        layer,
-                        "post_ffw_norm.weight"));
+            rms_norm_inplace(
+                ffn_output,
+                layer_tensor(
+                    layer,
+                    "post_ffw_norm.weight"));
 
             add_inplace(ffn_output, hidden);
             hidden =
@@ -1673,15 +1689,15 @@ Gemma3SingleTokenResult Gemma3Model::decode_token(
             }
         }
 
-        hidden =
-            rms_norm(
-                hidden,
-                "output_norm.weight");
+        rms_norm_inplace(
+            hidden,
+            "output_norm.weight");
 
         Gemma3SingleTokenResult result{};
-        result.hidden = hidden;
         result.top_tokens =
             top_logits(hidden, top_k);
+        result.hidden =
+            std::move(hidden);
 
         ++next_position_;
         return result;
