@@ -25,6 +25,10 @@ set(Q8_MATVEC_SPV "${VORTEXRT_SHADER_DIR}/q8_matvec.comp.spv")
 set(Q8_MATVEC_U8_SPV "${VORTEXRT_SHADER_DIR}/q8_matvec_u8.comp.spv")
 set(Q8_MATVEC_32_SPV "${VORTEXRT_SHADER_DIR}/q8_matvec_32.comp.spv")
 set(Q8_MATVEC_U8_32_SPV "${VORTEXRT_SHADER_DIR}/q8_matvec_u8_32.comp.spv")
+set(Q8_MATVEC_16_SPV "${VORTEXRT_SHADER_DIR}/q8_matvec_16.comp.spv")
+set(Q8_MATVEC_U8_16_SPV "${VORTEXRT_SHADER_DIR}/q8_matvec_u8_16.comp.spv")
+set(Q8_MATVEC_8_SPV "${VORTEXRT_SHADER_DIR}/q8_matvec_8.comp.spv")
+set(Q8_MATVEC_U8_8_SPV "${VORTEXRT_SHADER_DIR}/q8_matvec_u8_8.comp.spv")
 set(ARGMAX_SPV "${VORTEXRT_SHADER_DIR}/argmax.comp.spv")
 set(GELU_MUL_SPV "${VORTEXRT_SHADER_DIR}/gelu_mul.comp.spv")
 
@@ -105,6 +109,46 @@ add_custom_command(
     VERBATIM
 )
 
+add_custom_command(
+    OUTPUT "${Q8_MATVEC_16_SPV}"
+    COMMAND "${CMAKE_COMMAND}" -E make_directory "${VORTEXRT_SHADER_DIR}"
+    COMMAND "${GLSLC_EXECUTABLE}" -O
+            "${CMAKE_CURRENT_SOURCE_DIR}/shaders/q8_matvec_16.comp"
+            -o "${Q8_MATVEC_16_SPV}"
+    DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/q8_matvec_16.comp"
+    VERBATIM
+)
+
+add_custom_command(
+    OUTPUT "${Q8_MATVEC_U8_16_SPV}"
+    COMMAND "${CMAKE_COMMAND}" -E make_directory "${VORTEXRT_SHADER_DIR}"
+    COMMAND "${GLSLC_EXECUTABLE}" -O
+            "${CMAKE_CURRENT_SOURCE_DIR}/shaders/q8_matvec_u8_16.comp"
+            -o "${Q8_MATVEC_U8_16_SPV}"
+    DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/q8_matvec_u8_16.comp"
+    VERBATIM
+)
+
+add_custom_command(
+    OUTPUT "${Q8_MATVEC_8_SPV}"
+    COMMAND "${CMAKE_COMMAND}" -E make_directory "${VORTEXRT_SHADER_DIR}"
+    COMMAND "${GLSLC_EXECUTABLE}" -O
+            "${CMAKE_CURRENT_SOURCE_DIR}/shaders/q8_matvec_8.comp"
+            -o "${Q8_MATVEC_8_SPV}"
+    DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/q8_matvec_8.comp"
+    VERBATIM
+)
+
+add_custom_command(
+    OUTPUT "${Q8_MATVEC_U8_8_SPV}"
+    COMMAND "${CMAKE_COMMAND}" -E make_directory "${VORTEXRT_SHADER_DIR}"
+    COMMAND "${GLSLC_EXECUTABLE}" -O
+            "${CMAKE_CURRENT_SOURCE_DIR}/shaders/q8_matvec_u8_8.comp"
+            -o "${Q8_MATVEC_U8_8_SPV}"
+    DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/q8_matvec_u8_8.comp"
+    VERBATIM
+)
+
 add_custom_target(
     vortexrt_shaders ALL
     DEPENDS
@@ -113,6 +157,10 @@ add_custom_target(
         "${Q8_MATVEC_U8_SPV}"
         "${Q8_MATVEC_32_SPV}"
         "${Q8_MATVEC_U8_32_SPV}"
+        "${Q8_MATVEC_16_SPV}"
+        "${Q8_MATVEC_U8_16_SPV}"
+        "${Q8_MATVEC_8_SPV}"
+        "${Q8_MATVEC_U8_8_SPV}"
         "${ARGMAX_SPV}"
         "${GELU_MUL_SPV}"
 )
