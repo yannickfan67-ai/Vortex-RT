@@ -7,7 +7,6 @@
 #include <cstdint>
 #include <memory>
 #include <string>
-#include <unordered_map>
 #include <vector>
 
 namespace vortexrt {
@@ -83,11 +82,6 @@ private:
         std::vector<std::vector<float>> values;
     };
 
-    struct CachedQ8Weight {
-        const GgufTensorInfo* tensor = nullptr;
-        std::unique_ptr<Buffer> buffer;
-    };
-
     [[nodiscard]] std::vector<float> run_q8_matvec(
         const std::string& tensor_name,
         const std::vector<float>& input);
@@ -135,7 +129,7 @@ private:
     Q8MatVecPipeline q8_pipeline_;
     Gemma3Config config_{};
 
-    std::unordered_map<std::string, CachedQ8Weight> q8_weights_;
+    std::unique_ptr<Buffer> weights_arena_;
     std::unique_ptr<Buffer> activation_input_;
     std::unique_ptr<Buffer> activation_output_;
     std::vector<LayerKvCache> kv_cache_;
