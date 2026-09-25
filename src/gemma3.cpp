@@ -434,6 +434,95 @@ std::vector<float> Gemma3Model::run_q8_matvec(
     return output;
 }
 
+std::array<std::vector<float>, 3> Gemma3Model::run_q8_triplet(
+    const std::array<std::string, 3>& tensor_names,
+    const std::vector<float>& input) {
+
+    if (!weights_arena_) {
+        throw std::runtime_error(
+            "Gemma 3 weight arena is not initialized");
+    }
+
+    std::array<std::uint32_t, 3> offsets{};
+    std::array<std::uint32_t, 3> output_dims{};
+    std::size_t total_elements = 0;
+
+    for (std::size_t i = 0;
+         i < tensor_names.size();
+         ++i) {
+
+        const auto* tensor =
+            require_tensor(
+                gguf_,
+                tensor_names[i]);
+
+        if (tensor->type != 8 ||
+            tensor->dimensions.size() != 2 ||
+            tensor->dimensions[0] != input.size() ||
+            tensor->dimensions[0] >
+                std::numeric_limits<std::uint32_t>::max() ||
+            tensor->dimensions[1] >
+                std::numeric_limits<std::uint32_t>::max() ||
+            tensor->offset >
+                std::numeric_limits<std::uint32_t>::max()) {
+            throw std::runtime_error(
+                "Unsupported Q8_0 matrix layout: " +
+                tensor_names[i]);
+        }
+
+        offsets[i] =
+            static_cast<std::uint32_t>(
+                tensor->offset);
+        output_dims[i] =
+            static_cast<std::uint32_t>(
+                tensor->dimensions[1]);
+
+        total_elements +=
+            static_cast<std::size_t>(
+                output_dims[i]);
+    }
+
+    std::vector<float> packed(total_elements);
+
+    q8_pipeline_.run_staged_triplet(
+        *weights_arena_,
+        *activation_input_,
+        *activation_output_,
+        *staging_input_,
+        *staging_output_,
+        input.data(),
+        input.size() * sizeof(float),
+        packed.data(),
+        packed.size() * sizeof(float),
+        offsets,
+        static_cast<std::uint32_t>(
+            input.size()),
+        output_dims);
+
+    std::array<std::vector<float>, 3> result{};
+    std::size_t cursor = 0;
+
+    for (std::size_t i = 0;
+         i < result.size();
+         ++i) {
+
+        const std::size_t count =
+            output_dims[i];
+
+        result[i].assign(
+            packed.begin() +
+                static_cast<std::ptrdiff_t>(
+                    cursor),
+            packed.begin() +
+                static_cast<std::ptrdiff_t>(
+                    cursor + count));
+
+        cursor += count;
+    }
+
+    return result;
+}
+
 std::vector<float> Gemma3Model::rms_norm(
     const std::vector<float>& input,
     const std::string& weight_name) const {
