@@ -72,10 +72,20 @@ std::uint64_t checked_add(
 
 Q8MatVecPipeline::Q8MatVecPipeline(
     VulkanContext& context,
-    const std::string& path)
+    const std::string& path,
+    const std::string& u8_path)
     : context_(context) {
 
-    const auto code = load_spv(path);
+    using_native_u8_ =
+        !u8_path.empty() &&
+        context.capabilities().storage8 &&
+        context.capabilities().int8;
+
+    const auto code =
+        load_spv(
+            using_native_u8_
+                ? u8_path
+                : path);
 
     VkShaderModuleCreateInfo sm{};
     sm.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
