@@ -2,12 +2,14 @@ name: build
 
 on:
   push:
+    branches: [main]
   pull_request:
   workflow_dispatch:
 
 jobs:
   linux-lavapipe:
     runs-on: ubuntu-24.04
+
     steps:
       - uses: actions/checkout@v4
 
@@ -35,7 +37,7 @@ jobs:
           echo "VK_ICD_FILENAMES=$LVP_ICD" >> "$GITHUB_ENV"
 
       - name: Configure
-        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
 
       - name: Build
         run: cmake --build build -j2
@@ -43,16 +45,29 @@ jobs:
       - name: Verify CPU Vulkan driver
         run: vulkaninfo --summary
 
-      - name: Run Vortex-RT on Lavapipe
+      - name: Run Vulkan smoke tests
         run: |
           ./build/vortexrt-info
-          ./build/vortexrt-bench
+          ./build/vortexrt-bench --elements 65536 --repetitions 2
+          ./build/vortexrt-q8-test
+          ctest --test-dir build --output-on-failure
+
+      - name: Cache Gemma 3 270M Q8_0
+        id: gemma-cache
+        uses: actions/cache@v4
+        with:
+          path: gemma-3-270m-Q8_0.gguf
+          key: gemma-3-270m-q8-0-e00cf79514204dfe
 
       - name: Download Gemma 3 270M Q8_0
+        if: steps.gemma-cache.outputs.cache-hit != 'true'
         run: |
           curl -L --fail --retry 3 --retry-delay 2 \
             -o gemma-3-270m-Q8_0.gguf \
             "https://huggingface.co/ggml-org/gemma-3-270m-GGUF/resolve/main/gemma-3-270m-Q8_0.gguf?download=true"
+
+      - name: Verify Gemma checksum
+        run: |
           echo "e00cf79514204dfe2f4d6943f277ffea7fd8a4c8e955b4b7a869cfc157694881  gemma-3-270m-Q8_0.gguf" | sha256sum -c -
 
       - name: Parse and validate GGUF
@@ -61,18 +76,19 @@ jobs:
           grep -q "Tokenizer tokens readable:" gguf-report.txt
           grep -q "Validation: OK" gguf-report.txt
 
-      - name: Run real Gemma 3 position-zero forward
+      - name: Run real Gemma 3 forward and LM head
         run: |
-          ./build/vortexrt-gemma gemma-3-270m-Q8_0.gguf --token-id 2 --top-k 0 | tee gemma-forward-report.txt
+          ./build/vortexrt-gemma gemma-3-270m-Q8_0.gguf --token-id 2 --top-k 8 | tee gemma-forward-report.txt
           grep -q "Layers: 18" gemma-forward-report.txt
           grep -q "Final hidden checksum:" gemma-forward-report.txt
+          grep -q "Top logits:" gemma-forward-report.txt
           grep -q "Validation: OK" gemma-forward-report.txt
 
-      - name: Upload GGUF report
+      - name: Upload model reports
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: gguf-report
+          name: gemma-reports
           path: |
             gguf-report.txt
             gemma-forward-report.txt
