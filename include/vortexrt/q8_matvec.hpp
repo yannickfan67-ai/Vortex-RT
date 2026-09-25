@@ -202,8 +202,6 @@ private:
         VK_NULL_HANDLE,
     };
     VkCommandPool command_pool_ = VK_NULL_HANDLE;
-    VkCommandBuffer staged_command_ = VK_NULL_HANDLE;
-    VkCommandBuffer triplet_command_ = VK_NULL_HANDLE;
     VkFence fence_ = VK_NULL_HANDLE;
 
     VkBuffer bound_weights_ = VK_NULL_HANDLE;
