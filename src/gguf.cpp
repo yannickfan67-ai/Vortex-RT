@@ -1,6 +1,7 @@
 #include "vortexrt/gguf.hpp"
 
 #include <bit>
+#include <cmath>
 #include <cstring>
 #include <fstream>
 #include <limits>
@@ -199,6 +200,40 @@ std::optional<TypeLayout> type_layout(std::uint32_t type) {
     }
 }
 
+float f16_to_f32(std::uint16_t h) {
+    const std::uint32_t sign =
+        static_cast<std::uint32_t>(h & 0x8000u) << 16;
+    std::uint32_t exponent = (h >> 10) & 31u;
+    std::uint32_t mantissa = h & 1023u;
+    std::uint32_t bits = 0;
+
+    if (exponent == 0) {
+        if (mantissa == 0) {
+            bits = sign;
+        } else {
+            int e = -14;
+            while ((mantissa & 0x400u) == 0) {
+                mantissa <<= 1;
+                --e;
+            }
+            mantissa &= 0x3ffu;
+            bits =
+                sign |
+                (static_cast<std::uint32_t>(e + 127) << 23) |
+                (mantissa << 13);
+        }
+    } else if (exponent == 31) {
+        bits = sign | 0x7f800000u | (mantissa << 13);
+    } else {
+        bits =
+            sign |
+            ((exponent - 15u + 127u) << 23) |
+            (mantissa << 13);
+    }
+
+    return std::bit_cast<float>(bits);
+}
+
 std::optional<std::uint64_t> tensor_bytes(const GgufTensorInfo& tensor) {
     const auto layout = type_layout(tensor.type);
     if (!layout) {
@@ -274,7 +309,8 @@ std::optional<bool> GgufValue::as_bool() const {
     return std::nullopt;
 }
 
-GgufFile::GgufFile(const std::filesystem::path& path) {
+GgufFile::GgufFile(const std::filesystem::path& path)
+    : path_(path) {
     if constexpr (std::endian::native != std::endian::little) {
         throw std::runtime_error("Vortex-RT GGUF reader currently requires little-endian host");
     }
@@ -377,6 +413,186 @@ std::optional<std::string> GgufFile::metadata_string(const std::string& key) con
 std::optional<std::uint64_t> GgufFile::metadata_u64(const std::string& key) const {
     const auto* value = find_metadata(key);
     return value ? value->as_u64() : std::nullopt;
+}
+
+std::optional<std::uint64_t> GgufFile::tensor_byte_size(
+    const GgufTensorInfo& tensor) const {
+
+    return tensor_bytes(tensor);
+}
+
+std::vector<std::byte> GgufFile::read_tensor_bytes(
+    const GgufTensorInfo& tensor) const {
+
+    const auto bytes = tensor_bytes(tensor);
+    if (!bytes) {
+        throw std::runtime_error(
+            "Unsupported GGML tensor type for payload read: " +
+            tensor.name);
+    }
+    if (*bytes > static_cast<std::uint64_t>(
+            std::numeric_limits<std::size_t>::max()) ||
+        *bytes > static_cast<std::uint64_t>(
+            std::numeric_limits<std::streamsize>::max())) {
+        throw std::runtime_error(
+            "Tensor payload is too large to materialize: " +
+            tensor.name);
+    }
+
+    const std::uint64_t absolute = data_offset_ + tensor.offset;
+    if (absolute > file_size_ || *bytes > file_size_ - absolute) {
+        throw std::runtime_error(
+            "Tensor payload is outside GGUF file: " +
+            tensor.name);
+    }
+
+    std::ifstream stream(path_, std::ios::binary);
+    if (!stream) {
+        throw std::runtime_error(
+            "Failed to reopen GGUF file: " + path_.string());
+    }
+
+    stream.seekg(static_cast<std::streamoff>(absolute), std::ios::beg);
+    if (!stream) {
+        throw std::runtime_error(
+            "Failed to seek to GGUF tensor: " + tensor.name);
+    }
+
+    std::vector<std::byte> data(static_cast<std::size_t>(*bytes));
+    if (!data.empty()) {
+        stream.read(
+            reinterpret_cast<char*>(data.data()),
+            static_cast<std::streamsize>(data.size()));
+        if (!stream) {
+            throw std::runtime_error(
+                "Failed to read GGUF tensor: " + tensor.name);
+        }
+    }
+
+    return data;
+}
+
+std::vector<float> GgufFile::read_f32_tensor(
+    const GgufTensorInfo& tensor) const {
+
+    if (tensor.type != 0) {
+        throw std::runtime_error(
+            "Expected F32 tensor: " + tensor.name);
+    }
+
+    const auto bytes = read_tensor_bytes(tensor);
+    if ((bytes.size() % sizeof(float)) != 0) {
+        throw std::runtime_error(
+            "F32 tensor byte size is invalid: " + tensor.name);
+    }
+
+    std::vector<float> values(bytes.size() / sizeof(float));
+    if (!bytes.empty()) {
+        std::memcpy(values.data(), bytes.data(), bytes.size());
+    }
+    return values;
+}
+
+std::vector<float> GgufFile::read_q8_0_row(
+    const GgufTensorInfo& tensor,
+    std::uint64_t row) const {
+
+    if (tensor.type != 8) {
+        throw std::runtime_error(
+            "Expected Q8_0 tensor: " + tensor.name);
+    }
+    if (tensor.dimensions.empty() ||
+        tensor.dimensions.front() == 0 ||
+        (tensor.dimensions.front() % 32u) != 0u) {
+        throw std::runtime_error(
+            "Q8_0 tensor has unsupported row layout: " +
+            tensor.name);
+    }
+
+    const std::uint64_t width = tensor.dimensions.front();
+    std::uint64_t row_count = 1;
+    for (std::size_t i = 1; i < tensor.dimensions.size(); ++i) {
+        const auto dim = tensor.dimensions[i];
+        if (dim != 0 &&
+            row_count >
+                std::numeric_limits<std::uint64_t>::max() / dim) {
+            throw std::runtime_error(
+                "Q8_0 tensor row count overflow: " +
+                tensor.name);
+        }
+        row_count *= dim;
+    }
+    if (row >= row_count) {
+        throw std::runtime_error(
+            "Q8_0 row index out of range: " + tensor.name);
+    }
+
+    const std::uint64_t blocks = width / 32u;
+    if (blocks >
+        std::numeric_limits<std::uint64_t>::max() / 34u) {
+        throw std::runtime_error(
+            "Q8_0 row byte size overflow: " + tensor.name);
+    }
+    const std::uint64_t row_bytes = blocks * 34u;
+    const std::uint64_t row_offset = row * row_bytes;
+
+    const auto total_bytes = tensor_bytes(tensor);
+    if (!total_bytes ||
+        row_offset > *total_bytes ||
+        row_bytes > *total_bytes - row_offset) {
+        throw std::runtime_error(
+            "Q8_0 row lies outside tensor payload: " +
+            tensor.name);
+    }
+
+    const std::uint64_t absolute =
+        data_offset_ + tensor.offset + row_offset;
+    if (absolute > file_size_ ||
+        row_bytes > file_size_ - absolute ||
+        row_bytes >
+            static_cast<std::uint64_t>(
+                std::numeric_limits<std::streamsize>::max())) {
+        throw std::runtime_error(
+            "Q8_0 row lies outside GGUF file: " +
+            tensor.name);
+    }
+
+    std::ifstream stream(path_, std::ios::binary);
+    if (!stream) {
+        throw std::runtime_error(
+            "Failed to reopen GGUF file: " + path_.string());
+    }
+    stream.seekg(static_cast<std::streamoff>(absolute), std::ios::beg);
+
+    std::vector<std::uint8_t> encoded(
+        static_cast<std::size_t>(row_bytes));
+    stream.read(
+        reinterpret_cast<char*>(encoded.data()),
+        static_cast<std::streamsize>(encoded.size()));
+    if (!stream) {
+        throw std::runtime_error(
+            "Failed to read Q8_0 row: " + tensor.name);
+    }
+
+    std::vector<float> values(static_cast<std::size_t>(width));
+    for (std::uint64_t block = 0; block < blocks; ++block) {
+        const std::size_t base =
+            static_cast<std::size_t>(block * 34u);
+        const std::uint16_t scale_bits =
+            static_cast<std::uint16_t>(encoded[base]) |
+            (static_cast<std::uint16_t>(encoded[base + 1]) << 8u);
+        const float scale = f16_to_f32(scale_bits);
+
+        for (std::size_t k = 0; k < 32; ++k) {
+            const auto q =
+                static_cast<std::int8_t>(encoded[base + 2 + k]);
+            values[
+                static_cast<std::size_t>(block * 32u) + k] =
+                scale * static_cast<float>(q);
+        }
+    }
+
+    return values;
 }
 
 void GgufFile::validate() const {
