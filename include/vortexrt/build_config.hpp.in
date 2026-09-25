@@ -14,5 +14,7 @@ inline constexpr const char* q8_matvec_u8_32_spv =
     R"VORTEX(@Q8_MATVEC_U8_32_SPV@)VORTEX";
 inline constexpr const char* argmax_spv =
     R"VORTEX(@ARGMAX_SPV@)VORTEX";
+inline constexpr const char* gelu_mul_spv =
+    R"VORTEX(@GELU_MUL_SPV@)VORTEX";
 
 } // namespace vortexrt::build_config
