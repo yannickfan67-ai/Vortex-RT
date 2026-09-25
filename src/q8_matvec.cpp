@@ -173,16 +173,6 @@ Q8MatVecPipeline::Q8MatVecPipeline(
                 context.device(), &pci, nullptr, &command_pool_),
             "vkCreateCommandPool failed");
 
-        VkCommandBufferAllocateInfo ai{};
-        ai.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-        ai.commandPool = command_pool_;
-        ai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-        ai.commandBufferCount = 1;
-        check(
-            vkAllocateCommandBuffers(
-                context.device(), &ai, &command_buffer_),
-            "vkAllocateCommandBuffers failed");
-
         VkFenceCreateInfo fi{};
         fi.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
         check(
@@ -212,7 +202,7 @@ void Q8MatVecPipeline::cleanup() noexcept {
     if (command_pool_ != VK_NULL_HANDLE) {
         vkDestroyCommandPool(device, command_pool_, nullptr);
         command_pool_ = VK_NULL_HANDLE;
-        command_buffer_ = VK_NULL_HANDLE;
+        command_cache_.clear();
     }
     if (descriptor_pool_ != VK_NULL_HANDLE) {
         vkDestroyDescriptorPool(device, descriptor_pool_, nullptr);
@@ -230,6 +220,169 @@ void Q8MatVecPipeline::cleanup() noexcept {
     if (set_layout_ != VK_NULL_HANDLE) {
         vkDestroyDescriptorSetLayout(device, set_layout_, nullptr);
         set_layout_ = VK_NULL_HANDLE;
+    }
+}
+
+std::size_t Q8MatVecPipeline::DispatchKeyHash::operator()(
+    const DispatchKey& key) const noexcept {
+
+    std::size_t hash =
+        static_cast<std::size_t>(key.weight_byte_offset);
+
+    const auto combine = [&](std::uint32_t value) {
+        hash ^=
+            static_cast<std::size_t>(value) +
+            static_cast<std::size_t>(0x9e3779b9u) +
+            (hash << 6u) +
+            (hash >> 2u);
+    };
+
+    combine(key.input_dim);
+    combine(key.output_dim);
+    return hash;
+}
+
+VkCommandBuffer Q8MatVecPipeline::get_or_record_command(
+    const DispatchKey& key) {
+
+    if (const auto it = command_cache_.find(key);
+        it != command_cache_.end()) {
+        return it->second;
+    }
+
+    constexpr std::uint32_t kMaxGroupsX = 65535u;
+    constexpr std::uint32_t kMaxGroupsY = 65535u;
+
+    const std::uint32_t groups_x =
+        std::min(key.output_dim, kMaxGroupsX);
+    const std::uint64_t groups_y_64 =
+        (static_cast<std::uint64_t>(key.output_dim) +
+         groups_x - 1u) /
+        groups_x;
+
+    if (groups_y_64 > kMaxGroupsY) {
+        throw std::runtime_error(
+            "Q8MatVecPipeline output dimension exceeds 2D dispatch capacity");
+    }
+
+    VkCommandBuffer command = VK_NULL_HANDLE;
+
+    VkCommandBufferAllocateInfo ai{};
+    ai.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    ai.commandPool = command_pool_;
+    ai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    ai.commandBufferCount = 1;
+
+    check(
+        vkAllocateCommandBuffers(
+            context_.device(),
+            &ai,
+            &command),
+        "vkAllocateCommandBuffers failed");
+
+    try {
+        VkCommandBufferBeginInfo begin{};
+        begin.sType =
+            VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+        begin.flags =
+            VK_COMMAND_BUFFER_USAGE_SIMULTANEOUS_USE_BIT;
+
+        check(
+            vkBeginCommandBuffer(command, &begin),
+            "vkBeginCommandBuffer failed");
+
+        vkCmdBindPipeline(
+            command,
+            VK_PIPELINE_BIND_POINT_COMPUTE,
+            pipeline_);
+        vkCmdBindDescriptorSets(
+            command,
+            VK_PIPELINE_BIND_POINT_COMPUTE,
+            pipeline_layout_,
+            0,
+            1,
+            &descriptor_set_,
+            0,
+            nullptr);
+
+        const Push push{
+            key.weight_byte_offset,
+            key.input_dim,
+            key.output_dim,
+            groups_x,
+        };
+
+        vkCmdPushConstants(
+            command,
+            pipeline_layout_,
+            VK_SHADER_STAGE_COMPUTE_BIT,
+            0,
+            sizeof(push),
+            &push);
+
+        VkMemoryBarrier before_dispatch{};
+        before_dispatch.sType =
+            VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+        before_dispatch.srcAccessMask =
+            VK_ACCESS_MEMORY_WRITE_BIT;
+        before_dispatch.dstAccessMask =
+            VK_ACCESS_SHADER_READ_BIT |
+            VK_ACCESS_SHADER_WRITE_BIT;
+
+        vkCmdPipelineBarrier(
+            command,
+            VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+            0,
+            1,
+            &before_dispatch,
+            0,
+            nullptr,
+            0,
+            nullptr);
+
+        vkCmdDispatch(
+            command,
+            groups_x,
+            static_cast<std::uint32_t>(groups_y_64),
+            1);
+
+        VkMemoryBarrier after_dispatch{};
+        after_dispatch.sType =
+            VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+        after_dispatch.srcAccessMask =
+            VK_ACCESS_SHADER_WRITE_BIT;
+        after_dispatch.dstAccessMask =
+            VK_ACCESS_MEMORY_READ_BIT |
+            VK_ACCESS_MEMORY_WRITE_BIT;
+
+        vkCmdPipelineBarrier(
+            command,
+            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+            VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+            0,
+            1,
+            &after_dispatch,
+            0,
+            nullptr,
+            0,
+            nullptr);
+
+        check(
+            vkEndCommandBuffer(command),
+            "vkEndCommandBuffer failed");
+
+        command_cache_.emplace(key, command);
+        return command;
+    } catch (...) {
+        if (command != VK_NULL_HANDLE) {
+            vkFreeCommandBuffers(
+                context_.device(),
+                command_pool_,
+                1,
+                &command);
+        }
+        throw;
     }
 }
 
@@ -341,124 +494,18 @@ void Q8MatVecPipeline::run(
         vkResetFences(context_.device(), 1, &fence_),
         "vkResetFences failed");
 
-    const bool need_recording =
-        !command_recording_valid_ ||
-        recorded_weight_byte_offset_ != weight_byte_offset ||
-        recorded_input_dim_ != input_dim ||
-        recorded_output_dim_ != output_dim;
-
-    if (need_recording) {
-        check(
-            vkResetCommandBuffer(command_buffer_, 0),
-            "vkResetCommandBuffer failed");
-
-        VkCommandBufferBeginInfo begin{};
-        begin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-        check(
-            vkBeginCommandBuffer(command_buffer_, &begin),
-            "vkBeginCommandBuffer failed");
-
-        vkCmdBindPipeline(
-            command_buffer_,
-            VK_PIPELINE_BIND_POINT_COMPUTE,
-            pipeline_);
-        vkCmdBindDescriptorSets(
-            command_buffer_,
-            VK_PIPELINE_BIND_POINT_COMPUTE,
-            pipeline_layout_,
-            0,
-            1,
-            &descriptor_set_,
-            0,
-            nullptr);
-
-        constexpr std::uint32_t kMaxGroupsX = 65535u;
-        constexpr std::uint32_t kMaxGroupsY = 65535u;
-        const std::uint32_t groups_x =
-            std::min(output_dim, kMaxGroupsX);
-        const std::uint64_t groups_y_64 =
-            (static_cast<std::uint64_t>(output_dim) +
-             groups_x - 1u) /
-            groups_x;
-
-        if (groups_y_64 > kMaxGroupsY) {
-            throw std::runtime_error(
-                "Q8MatVecPipeline output dimension exceeds 2D dispatch capacity");
-        }
-
-        const Push push{
-            weight_byte_offset,
-            input_dim,
-            output_dim,
-            groups_x,
-        };
-
-        vkCmdPushConstants(
-            command_buffer_,
-            pipeline_layout_,
-            VK_SHADER_STAGE_COMPUTE_BIT,
-            0,
-            sizeof(push),
-            &push);
-
-        VkMemoryBarrier before_dispatch{};
-        before_dispatch.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
-        before_dispatch.srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT;
-        before_dispatch.dstAccessMask =
-            VK_ACCESS_SHADER_READ_BIT |
-            VK_ACCESS_SHADER_WRITE_BIT;
-
-        vkCmdPipelineBarrier(
-            command_buffer_,
-            VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
-            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-            0,
-            1,
-            &before_dispatch,
-            0,
-            nullptr,
-            0,
-            nullptr);
-
-        vkCmdDispatch(
-            command_buffer_,
-            groups_x,
-            static_cast<std::uint32_t>(groups_y_64),
-            1);
-
-        VkMemoryBarrier after_dispatch{};
-        after_dispatch.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
-        after_dispatch.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-        after_dispatch.dstAccessMask =
-            VK_ACCESS_MEMORY_READ_BIT |
-            VK_ACCESS_MEMORY_WRITE_BIT;
-
-        vkCmdPipelineBarrier(
-            command_buffer_,
-            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-            VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
-            0,
-            1,
-            &after_dispatch,
-            0,
-            nullptr,
-            0,
-            nullptr);
-
-        check(
-            vkEndCommandBuffer(command_buffer_),
-            "vkEndCommandBuffer failed");
-
-        recorded_weight_byte_offset_ = weight_byte_offset;
-        recorded_input_dim_ = input_dim;
-        recorded_output_dim_ = output_dim;
-        command_recording_valid_ = true;
-    }
+    const DispatchKey dispatch_key{
+        weight_byte_offset,
+        input_dim,
+        output_dim,
+    };
+    const VkCommandBuffer command =
+        get_or_record_command(dispatch_key);
 
     VkSubmitInfo submit{};
     submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
     submit.commandBufferCount = 1;
-    submit.pCommandBuffers = &command_buffer_;
+    submit.pCommandBuffers = &command;
 
     check(
         vkQueueSubmit(
