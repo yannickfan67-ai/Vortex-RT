@@ -136,12 +136,17 @@ private:
         const std::array<std::string, 3>& tensor_names,
         const std::vector<float>& input);
 
-    [[nodiscard]] std::vector<float> rms_norm(
+    void rms_norm_into(
         const std::vector<float>& input,
+        const std::string& weight_name,
+        std::vector<float>& output) const;
+
+    void rms_norm_inplace(
+        std::vector<float>& values,
         const std::string& weight_name) const;
 
-    [[nodiscard]] std::vector<float> rms_norm_heads(
-        const std::vector<float>& input,
+    void rms_norm_heads_inplace(
+        std::vector<float>& values,
         std::uint32_t head_count,
         const std::string& weight_name) const;
 
