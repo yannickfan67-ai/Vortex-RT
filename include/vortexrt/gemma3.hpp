@@ -135,6 +135,8 @@ private:
     std::unique_ptr<Buffer> weights_arena_;
     std::unique_ptr<Buffer> activation_input_;
     std::unique_ptr<Buffer> activation_output_;
+    std::unique_ptr<Buffer> staging_input_;
+    std::unique_ptr<Buffer> staging_output_;
     std::vector<LayerKvCache> kv_cache_;
     std::uint32_t next_position_ = 0;
 };
