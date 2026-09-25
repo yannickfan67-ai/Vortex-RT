@@ -608,6 +608,28 @@ void Q8MatVecPipeline::run_staged(
             "Q8MatVecPipeline host buffer is too small");
     }
 
+    if (input.host_visible() &&
+        (!readback || output.host_visible())) {
+        input.upload(
+            host_input,
+            static_cast<std::size_t>(required_input_bytes));
+
+        run(
+            weights,
+            input,
+            output,
+            weight_byte_offset,
+            input_dim,
+            output_dim);
+
+        if (readback) {
+            output.download(
+                host_output,
+                static_cast<std::size_t>(required_output_bytes));
+        }
+        return;
+    }
+
     staging_input.upload(
         host_input,
         static_cast<std::size_t>(required_input_bytes));
