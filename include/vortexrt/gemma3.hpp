@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace vortexrt {
@@ -129,6 +130,7 @@ private:
     Q8MatVecPipeline q8_pipeline_;
     Gemma3Config config_{};
 
+    std::unordered_map<std::string, std::vector<float>> f32_weights_;
     std::unique_ptr<Buffer> weights_arena_;
     std::unique_ptr<Buffer> activation_input_;
     std::unique_ptr<Buffer> activation_output_;
