@@ -144,6 +144,7 @@ private:
     std::unique_ptr<Buffer> activation_output_;
     std::unique_ptr<Buffer> staging_input_;
     std::unique_ptr<Buffer> staging_output_;
+    std::unique_ptr<Buffer> argmax_output_;
     std::vector<LayerKvCache> kv_cache_;
     std::uint32_t next_position_ = 0;
 };
