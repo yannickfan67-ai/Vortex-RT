@@ -62,6 +62,7 @@ add_library(vortexrt STATIC
     src/compute_pipeline.cpp
     src/q8_matvec.cpp
     src/gguf.cpp
+    src/gemma3.cpp
 )
 
 target_include_directories(vortexrt
@@ -91,6 +92,10 @@ add_dependencies(vortexrt-q8-test vortexrt_shaders)
 
 add_executable(vortexrt-gguf-info src/gguf_main.cpp)
 target_link_libraries(vortexrt-gguf-info PRIVATE vortexrt)
+
+add_executable(vortexrt-gemma src/gemma_main.cpp)
+target_link_libraries(vortexrt-gemma PRIVATE vortexrt)
+add_dependencies(vortexrt-gemma vortexrt_shaders)
 
 include(CTest)
 if(BUILD_TESTING)
