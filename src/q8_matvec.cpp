@@ -1375,57 +1375,72 @@ void Q8MatVecPipeline::run_staged_triplet(
         static_cast<std::size_t>(
             required_input_bytes));
 
-    for (std::size_t set_index = 0;
-         set_index < triplet_sets_.size();
-         ++set_index) {
+    const bool descriptors_changed =
+        !triplet_descriptors_valid_ ||
+        triplet_bound_weights_ != weights.handle() ||
+        triplet_bound_input_ != input.handle() ||
+        triplet_bound_output_ != output.handle() ||
+        triplet_bound_output_dims_ != output_dims;
 
-        const VkDeviceSize output_bytes =
-            static_cast<VkDeviceSize>(
-                output_dims[set_index]) *
-            sizeof(float);
+    if (descriptors_changed) {
+        for (std::size_t set_index = 0;
+             set_index < output_dims.size();
+             ++set_index) {
 
-        std::array<VkDescriptorBufferInfo, 3> infos{{
-            {
-                weights.handle(),
+            const VkDeviceSize output_bytes =
+                static_cast<VkDeviceSize>(
+                    output_dims[set_index]) *
+                sizeof(float);
+
+            std::array<VkDescriptorBufferInfo, 3> infos{{
+                {
+                    weights.handle(),
+                    0,
+                    weights.size(),
+                },
+                {
+                    input.handle(),
+                    0,
+                    input.size(),
+                },
+                {
+                    output.handle(),
+                    output_offsets[set_index],
+                    output_bytes,
+                },
+            }};
+
+            std::array<VkWriteDescriptorSet, 3> writes{};
+            for (std::uint32_t binding = 0;
+                 binding < writes.size();
+                 ++binding) {
+                writes[binding].sType =
+                    VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                writes[binding].dstSet =
+                    triplet_sets_[set_index];
+                writes[binding].dstBinding =
+                    binding;
+                writes[binding].descriptorCount = 1;
+                writes[binding].descriptorType =
+                    VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+                writes[binding].pBufferInfo =
+                    &infos[binding];
+            }
+
+            vkUpdateDescriptorSets(
+                context_.device(),
+                static_cast<std::uint32_t>(
+                    writes.size()),
+                writes.data(),
                 0,
-                weights.size(),
-            },
-            {
-                input.handle(),
-                0,
-                input.size(),
-            },
-            {
-                output.handle(),
-                output_offsets[set_index],
-                output_bytes,
-            },
-        }};
-
-        std::array<VkWriteDescriptorSet, 3> writes{};
-        for (std::uint32_t binding = 0;
-             binding < writes.size();
-             ++binding) {
-            writes[binding].sType =
-                VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-            writes[binding].dstSet =
-                triplet_sets_[set_index];
-            writes[binding].dstBinding =
-                binding;
-            writes[binding].descriptorCount = 1;
-            writes[binding].descriptorType =
-                VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-            writes[binding].pBufferInfo =
-                &infos[binding];
+                nullptr);
         }
 
-        vkUpdateDescriptorSets(
-            context_.device(),
-            static_cast<std::uint32_t>(
-                writes.size()),
-            writes.data(),
-            0,
-            nullptr);
+        triplet_bound_weights_ = weights.handle();
+        triplet_bound_input_ = input.handle();
+        triplet_bound_output_ = output.handle();
+        triplet_bound_output_dims_ = output_dims;
+        triplet_descriptors_valid_ = true;
     }
 
     if (triplet_command_ == VK_NULL_HANDLE) {
