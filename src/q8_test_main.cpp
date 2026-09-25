@@ -449,7 +449,31 @@ int main() {
                 kOutput,
             });
 
+        std::vector<float> pair_replay(
+            pair_output.size());
+
+        pipeline.run_staged_pair(
+            multi_weights,
+            fused_input,
+            fused_output,
+            staging_input,
+            staging_output,
+            input.data(),
+            input.size() * sizeof(float),
+            pair_replay.data(),
+            pair_replay.size() * sizeof(float),
+            std::array<std::uint32_t, 2>{
+                0u,
+                stride,
+            },
+            kInput,
+            std::array<std::uint32_t, 2>{
+                kOutput,
+                kOutput,
+            });
+
         float pair_max_error = 0.0f;
+        float pair_replay_error = 0.0f;
         for (std::size_t copy = 0;
              copy < 2;
              ++copy) {
@@ -464,6 +488,16 @@ int main() {
                                 copy * kOutput +
                                 row] -
                             reference[row]));
+                pair_replay_error =
+                    std::max(
+                        pair_replay_error,
+                        std::fabs(
+                            pair_replay[
+                                copy * kOutput +
+                                row] -
+                            pair_output[
+                                copy * kOutput +
+                                row]));
             }
         }
 
@@ -492,7 +526,33 @@ int main() {
                 kOutput,
             });
 
+        std::vector<float> triplet_replay(
+            triplet_output.size());
+
+        pipeline.run_staged_triplet(
+            multi_weights,
+            fused_input,
+            fused_output,
+            staging_input,
+            staging_output,
+            input.data(),
+            input.size() * sizeof(float),
+            triplet_replay.data(),
+            triplet_replay.size() * sizeof(float),
+            std::array<std::uint32_t, 3>{
+                0u,
+                stride,
+                2u * stride,
+            },
+            kInput,
+            std::array<std::uint32_t, 3>{
+                kOutput,
+                kOutput,
+                kOutput,
+            });
+
         float triplet_max_error = 0.0f;
+        float triplet_replay_error = 0.0f;
         for (std::size_t copy = 0;
              copy < 3;
              ++copy) {
@@ -507,6 +567,16 @@ int main() {
                                 copy * kOutput +
                                 row] -
                             reference[row]));
+                triplet_replay_error =
+                    std::max(
+                        triplet_replay_error,
+                        std::fabs(
+                            triplet_replay[
+                                copy * kOutput +
+                                row] -
+                            triplet_output[
+                                copy * kOutput +
+                                row]));
             }
         }
 
@@ -523,14 +593,24 @@ int main() {
             << pair_max_error
             << "\n";
         std::cout
+            << "  fused pair cached replay error: "
+            << pair_replay_error
+            << "\n";
+        std::cout
             << "  fused triplet max abs error: "
             << triplet_max_error
+            << "\n";
+        std::cout
+            << "  fused triplet cached replay error: "
+            << triplet_replay_error
             << "\n";
 
         if (staged_max_error > 2e-3f ||
             staged_replay_error > 1e-6f ||
             pair_max_error > 2e-3f ||
-            triplet_max_error > 2e-3f) {
+            pair_replay_error > 1e-6f ||
+            triplet_max_error > 2e-3f ||
+            triplet_replay_error > 1e-6f) {
             throw std::runtime_error(
                 "Q8_0 fused Vulkan projection mismatch");
         }
