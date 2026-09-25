@@ -91,12 +91,17 @@ Gemma3Model::Gemma3Model(
           q8_matvec_u8_spirv,
           gelu_mul_spirv) {
 
-    fuse_projections_ =
-        context_.capabilities().device_type !=
-        VK_PHYSICAL_DEVICE_TYPE_CPU;
-
     const auto subgroup_size =
         context_.capabilities().subgroup_size;
+
+    // Hardware GPUs benefit from fewer queue submissions.  For CPU
+    // Vulkan, enable fusion only on the subgroup-8 path that is covered
+    // by the end-to-end Lavapipe A/B benchmark; keep other software
+    // drivers conservative until measured.
+    fuse_projections_ =
+        context_.capabilities().device_type !=
+            VK_PHYSICAL_DEVICE_TYPE_CPU ||
+        subgroup_size == 8u;
 
     force_q8_lane_override_ =
         q8_lane_override != 0;
