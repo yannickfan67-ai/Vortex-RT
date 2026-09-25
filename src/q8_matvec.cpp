@@ -73,8 +73,18 @@ std::uint64_t checked_add(
 Q8MatVecPipeline::Q8MatVecPipeline(
     VulkanContext& context,
     const std::string& path,
-    const std::string& u8_path)
+    const std::string& u8_path,
+    const std::string& gelu_mul_path)
     : context_(context) {
+
+    VkPhysicalDeviceProperties properties{};
+    vkGetPhysicalDeviceProperties(
+        context.physical_device(),
+        &properties);
+    storage_buffer_alignment_ =
+        std::max<VkDeviceSize>(
+            1,
+            properties.limits.minStorageBufferOffsetAlignment);
 
     using_native_u8_ =
         !u8_path.empty() &&
@@ -93,6 +103,7 @@ Q8MatVecPipeline::Q8MatVecPipeline(
     sm.pCode = code.data();
 
     VkShaderModule shader = VK_NULL_HANDLE;
+    VkShaderModule gelu_shader = VK_NULL_HANDLE;
     check(
         vkCreateShaderModule(context.device(), &sm, nullptr, &shader),
         "vkCreateShaderModule failed");
@@ -194,6 +205,158 @@ Q8MatVecPipeline::Q8MatVecPipeline(
         triplet_sets_[1] = sets[4];
         triplet_sets_[2] = sets[5];
 
+        if (!gelu_mul_path.empty()) {
+            const auto gelu_code =
+                load_spv(gelu_mul_path);
+
+            VkShaderModuleCreateInfo gelu_sm{};
+            gelu_sm.sType =
+                VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+            gelu_sm.codeSize =
+                gelu_code.size() * sizeof(std::uint32_t);
+            gelu_sm.pCode = gelu_code.data();
+
+            check(
+                vkCreateShaderModule(
+                    context.device(),
+                    &gelu_sm,
+                    nullptr,
+                    &gelu_shader),
+                "vkCreateShaderModule failed for GELU");
+
+            std::array<VkDescriptorSetLayoutBinding, 2>
+                gelu_bindings{};
+            for (std::uint32_t i = 0;
+                 i < gelu_bindings.size();
+                 ++i) {
+                gelu_bindings[i].binding = i;
+                gelu_bindings[i].descriptorType =
+                    VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+                gelu_bindings[i].descriptorCount = 1;
+                gelu_bindings[i].stageFlags =
+                    VK_SHADER_STAGE_COMPUTE_BIT;
+            }
+
+            VkDescriptorSetLayoutCreateInfo gelu_sl{};
+            gelu_sl.sType =
+                VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+            gelu_sl.bindingCount =
+                static_cast<std::uint32_t>(
+                    gelu_bindings.size());
+            gelu_sl.pBindings =
+                gelu_bindings.data();
+
+            check(
+                vkCreateDescriptorSetLayout(
+                    context.device(),
+                    &gelu_sl,
+                    nullptr,
+                    &gelu_set_layout_),
+                "vkCreateDescriptorSetLayout failed for GELU");
+
+            VkPushConstantRange gelu_range{};
+            gelu_range.stageFlags =
+                VK_SHADER_STAGE_COMPUTE_BIT;
+            gelu_range.size =
+                sizeof(std::uint32_t);
+
+            VkPipelineLayoutCreateInfo gelu_pl{};
+            gelu_pl.sType =
+                VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+            gelu_pl.setLayoutCount = 1;
+            gelu_pl.pSetLayouts =
+                &gelu_set_layout_;
+            gelu_pl.pushConstantRangeCount = 1;
+            gelu_pl.pPushConstantRanges =
+                &gelu_range;
+
+            check(
+                vkCreatePipelineLayout(
+                    context.device(),
+                    &gelu_pl,
+                    nullptr,
+                    &gelu_pipeline_layout_),
+                "vkCreatePipelineLayout failed for GELU");
+
+            VkPipelineShaderStageCreateInfo gelu_stage{};
+            gelu_stage.sType =
+                VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+            gelu_stage.stage =
+                VK_SHADER_STAGE_COMPUTE_BIT;
+            gelu_stage.module = gelu_shader;
+            gelu_stage.pName = "main";
+
+            VkComputePipelineCreateInfo gelu_cp{};
+            gelu_cp.sType =
+                VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+            gelu_cp.stage = gelu_stage;
+            gelu_cp.layout =
+                gelu_pipeline_layout_;
+
+            check(
+                vkCreateComputePipelines(
+                    context.device(),
+                    VK_NULL_HANDLE,
+                    1,
+                    &gelu_cp,
+                    nullptr,
+                    &gelu_pipeline_),
+                "vkCreateComputePipelines failed for GELU");
+
+            VkDescriptorPoolSize ffn_ps{};
+            ffn_ps.type =
+                VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            ffn_ps.descriptorCount = 11;
+
+            VkDescriptorPoolCreateInfo ffn_dp{};
+            ffn_dp.sType =
+                VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+            ffn_dp.maxSets = 4;
+            ffn_dp.poolSizeCount = 1;
+            ffn_dp.pPoolSizes = &ffn_ps;
+
+            check(
+                vkCreateDescriptorPool(
+                    context.device(),
+                    &ffn_dp,
+                    nullptr,
+                    &ffn_descriptor_pool_),
+                "vkCreateDescriptorPool failed for FFN");
+
+            std::array<VkDescriptorSetLayout, 4>
+                ffn_layouts{
+                    set_layout_,
+                    set_layout_,
+                    set_layout_,
+                    gelu_set_layout_,
+                };
+            std::array<VkDescriptorSet, 4>
+                ffn_sets{};
+
+            VkDescriptorSetAllocateInfo ffn_da{};
+            ffn_da.sType =
+                VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+            ffn_da.descriptorPool =
+                ffn_descriptor_pool_;
+            ffn_da.descriptorSetCount =
+                static_cast<std::uint32_t>(
+                    ffn_sets.size());
+            ffn_da.pSetLayouts =
+                ffn_layouts.data();
+
+            check(
+                vkAllocateDescriptorSets(
+                    context.device(),
+                    &ffn_da,
+                    ffn_sets.data()),
+                "vkAllocateDescriptorSets failed for FFN");
+
+            ffn_q8_sets_[0] = ffn_sets[0];
+            ffn_q8_sets_[1] = ffn_sets[1];
+            ffn_q8_sets_[2] = ffn_sets[2];
+            ffn_gelu_set_ = ffn_sets[3];
+        }
+
         VkCommandPoolCreateInfo pci{};
         pci.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
         pci.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
@@ -210,11 +373,23 @@ Q8MatVecPipeline::Q8MatVecPipeline(
                 context.device(), &fi, nullptr, &fence_),
             "vkCreateFence failed");
     } catch (...) {
+        if (gelu_shader != VK_NULL_HANDLE) {
+            vkDestroyShaderModule(
+                context.device(),
+                gelu_shader,
+                nullptr);
+        }
         vkDestroyShaderModule(context.device(), shader, nullptr);
         cleanup();
         throw;
     }
 
+    if (gelu_shader != VK_NULL_HANDLE) {
+        vkDestroyShaderModule(
+            context.device(),
+            gelu_shader,
+            nullptr);
+    }
     vkDestroyShaderModule(context.device(), shader, nullptr);
 }
 
@@ -233,6 +408,38 @@ void Q8MatVecPipeline::cleanup() noexcept {
         vkDestroyCommandPool(device, command_pool_, nullptr);
         command_pool_ = VK_NULL_HANDLE;
         command_cache_.clear();
+        ffn_command_cache_.clear();
+    }
+    if (ffn_descriptor_pool_ != VK_NULL_HANDLE) {
+        vkDestroyDescriptorPool(
+            device,
+            ffn_descriptor_pool_,
+            nullptr);
+        ffn_descriptor_pool_ = VK_NULL_HANDLE;
+        ffn_q8_sets_.fill(VK_NULL_HANDLE);
+        ffn_gelu_set_ = VK_NULL_HANDLE;
+        ffn_descriptors_valid_ = false;
+    }
+    if (gelu_pipeline_ != VK_NULL_HANDLE) {
+        vkDestroyPipeline(
+            device,
+            gelu_pipeline_,
+            nullptr);
+        gelu_pipeline_ = VK_NULL_HANDLE;
+    }
+    if (gelu_pipeline_layout_ != VK_NULL_HANDLE) {
+        vkDestroyPipelineLayout(
+            device,
+            gelu_pipeline_layout_,
+            nullptr);
+        gelu_pipeline_layout_ = VK_NULL_HANDLE;
+    }
+    if (gelu_set_layout_ != VK_NULL_HANDLE) {
+        vkDestroyDescriptorSetLayout(
+            device,
+            gelu_set_layout_,
+            nullptr);
+        gelu_set_layout_ = VK_NULL_HANDLE;
     }
     if (descriptor_pool_ != VK_NULL_HANDLE) {
         vkDestroyDescriptorPool(device, descriptor_pool_, nullptr);
@@ -272,6 +479,29 @@ std::size_t Q8MatVecPipeline::DispatchKeyHash::operator()(
     };
 
     combine(key.input_dim);
+    combine(key.output_dim);
+    return hash;
+}
+
+std::size_t Q8MatVecPipeline::FfnDispatchKeyHash::operator()(
+    const FfnDispatchKey& key) const noexcept {
+
+    std::size_t hash =
+        static_cast<std::size_t>(
+            key.gate_weight_byte_offset);
+
+    const auto combine = [&](std::uint32_t value) {
+        hash ^=
+            static_cast<std::size_t>(value) +
+            static_cast<std::size_t>(0x9e3779b9u) +
+            (hash << 6u) +
+            (hash >> 2u);
+    };
+
+    combine(key.up_weight_byte_offset);
+    combine(key.down_weight_byte_offset);
+    combine(key.input_dim);
+    combine(key.ffn_dim);
     combine(key.output_dim);
     return hash;
 }
