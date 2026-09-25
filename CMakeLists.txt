@@ -158,6 +158,10 @@ add_executable(vortexrt-q8-test src/q8_test_main.cpp)
 target_link_libraries(vortexrt-q8-test PRIVATE vortexrt)
 add_dependencies(vortexrt-q8-test vortexrt_shaders)
 
+add_executable(vortexrt-gelu-test src/gelu_test_main.cpp)
+target_link_libraries(vortexrt-gelu-test PRIVATE vortexrt)
+add_dependencies(vortexrt-gelu-test vortexrt_shaders)
+
 add_executable(vortexrt-gguf-info src/gguf_main.cpp)
 target_link_libraries(vortexrt-gguf-info PRIVATE vortexrt)
 
@@ -173,4 +177,5 @@ if(BUILD_TESTING)
         COMMAND vortexrt-bench --elements 65536 --repetitions 2
     )
     add_test(NAME vortexrt-q8-matvec COMMAND vortexrt-q8-test)
+    add_test(NAME vortexrt-gelu-mul COMMAND vortexrt-gelu-test)
 endif()
