@@ -182,6 +182,35 @@ Gemma3Model::Gemma3Model(
 
     kv_cache_.resize(config_.block_count);
 
+    const auto cache_f32 = [&](const std::string& name) {
+        const auto* tensor = require_tensor(gguf_, name);
+        f32_weights_.emplace(
+            name,
+            gguf_.read_f32_tensor(*tensor));
+    };
+
+    cache_f32("output_norm.weight");
+
+    constexpr const char* kNormSuffixes[] = {
+        "attn_norm.weight",
+        "attn_q_norm.weight",
+        "attn_k_norm.weight",
+        "post_attention_norm.weight",
+        "ffn_norm.weight",
+        "post_ffw_norm.weight",
+    };
+
+    for (std::uint32_t layer = 0;
+         layer < config_.block_count;
+         ++layer) {
+        for (const char* suffix : kNormSuffixes) {
+            cache_f32(
+                layer_tensor(
+                    layer,
+                    suffix));
+        }
+    }
+
     const std::uint64_t tensor_data_bytes =
         gguf_.file_size() - gguf_.data_offset();
 
@@ -329,10 +358,13 @@ std::vector<float> Gemma3Model::rms_norm(
     const std::vector<float>& input,
     const std::string& weight_name) const {
 
-    const auto* tensor =
-        require_tensor(gguf_, weight_name);
-    const auto weights =
-        gguf_.read_f32_tensor(*tensor);
+    const auto cached =
+        f32_weights_.find(weight_name);
+    if (cached == f32_weights_.end()) {
+        throw std::runtime_error(
+            "Uncached RMSNorm tensor: " + weight_name);
+    }
+    const auto& weights = cached->second;
 
     if (weights.size() != input.size()) {
         throw std::runtime_error(
@@ -370,10 +402,13 @@ std::vector<float> Gemma3Model::rms_norm_heads(
     std::uint32_t head_count,
     const std::string& weight_name) const {
 
-    const auto* tensor =
-        require_tensor(gguf_, weight_name);
-    const auto weights =
-        gguf_.read_f32_tensor(*tensor);
+    const auto cached =
+        f32_weights_.find(weight_name);
+    if (cached == f32_weights_.end()) {
+        throw std::runtime_error(
+            "Uncached Q/K RMSNorm tensor: " + weight_name);
+    }
+    const auto& weights = cached->second;
 
     if (weights.size() != config_.head_dim ||
         input.size() !=
