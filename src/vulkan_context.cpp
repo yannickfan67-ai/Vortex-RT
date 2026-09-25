@@ -453,6 +453,8 @@ BufferMemoryAllocation VulkanContext::allocate_buffer_memory(
             vkAllocateMemory(device_, &mai, nullptr, &allocation.memory),
             "vkAllocateMemory failed");
         allocation.size = requirements.size;
+        allocation.properties =
+            memory_properties_.memoryTypes[memory_type].propertyFlags;
         return allocation;
     }
 
@@ -495,6 +497,8 @@ BufferMemoryAllocation VulkanContext::allocate_buffer_memory(
                 allocation.offset = offset;
                 allocation.size = requirements.size;
                 allocation.block_id = block.id;
+                allocation.properties =
+                    memory_properties_.memoryTypes[block.memory_type].propertyFlags;
                 allocation.pooled = true;
                 return allocation;
             }
