@@ -1102,6 +1102,653 @@ void Q8MatVecPipeline::run_staged(
     }
 }
 
+void Q8MatVecPipeline::run_staged_ffn(
+    Buffer& weights,
+    Buffer& input,
+    Buffer& workspace,
+    Buffer& staging_input,
+    Buffer& staging_output,
+    const void* host_input,
+    std::size_t host_input_bytes,
+    void* host_output,
+    std::size_t host_output_bytes,
+    std::uint32_t gate_weight_byte_offset,
+    std::uint32_t up_weight_byte_offset,
+    std::uint32_t down_weight_byte_offset,
+    std::uint32_t input_dim,
+    std::uint32_t ffn_dim,
+    std::uint32_t output_dim) {
+
+    if (gelu_pipeline_ == VK_NULL_HANDLE ||
+        gelu_pipeline_layout_ == VK_NULL_HANDLE ||
+        ffn_descriptor_pool_ == VK_NULL_HANDLE) {
+        throw std::runtime_error(
+            "Q8MatVecPipeline fused FFN path is unavailable");
+    }
+    if (host_input == nullptr || host_output == nullptr) {
+        throw std::runtime_error(
+            "Q8MatVecPipeline::run_staged_ffn received null host buffer");
+    }
+    if (input_dim == 0 ||
+        ffn_dim == 0 ||
+        output_dim == 0 ||
+        (input_dim % kQ8BlockElements) != 0 ||
+        (ffn_dim % kQ8BlockElements) != 0) {
+        throw std::runtime_error(
+            "Q8 fused FFN dimensions must be non-zero and Q8 aligned");
+    }
+    if ((gate_weight_byte_offset & 3u) != 0u ||
+        (up_weight_byte_offset & 3u) != 0u ||
+        (down_weight_byte_offset & 3u) != 0u) {
+        throw std::runtime_error(
+            "Q8 fused FFN weight offsets must be 4-byte aligned");
+    }
+
+    const auto matrix_bytes =
+        [&](std::uint32_t in_dim,
+            std::uint32_t out_dim,
+            const char* what) -> std::uint64_t {
+        const std::uint64_t blocks =
+            static_cast<std::uint64_t>(in_dim) /
+            kQ8BlockElements;
+        const std::uint64_t row_bytes =
+            checked_mul(
+                blocks,
+                kQ8BlockBytes,
+                what);
+        return checked_mul(
+            static_cast<std::uint64_t>(out_dim),
+            row_bytes,
+            what);
+    };
+
+    const std::uint64_t gate_matrix_bytes =
+        matrix_bytes(
+            input_dim,
+            ffn_dim,
+            "Q8 fused FFN gate matrix size overflow");
+    const std::uint64_t up_matrix_bytes =
+        matrix_bytes(
+            input_dim,
+            ffn_dim,
+            "Q8 fused FFN up matrix size overflow");
+    const std::uint64_t down_matrix_bytes =
+        matrix_bytes(
+            ffn_dim,
+            output_dim,
+            "Q8 fused FFN down matrix size overflow");
+
+    const std::uint64_t gate_weight_end =
+        checked_add(
+            gate_weight_byte_offset,
+            gate_matrix_bytes,
+            "Q8 fused FFN gate weight range overflow");
+    const std::uint64_t up_weight_end =
+        checked_add(
+            up_weight_byte_offset,
+            up_matrix_bytes,
+            "Q8 fused FFN up weight range overflow");
+    const std::uint64_t down_weight_end =
+        checked_add(
+            down_weight_byte_offset,
+            down_matrix_bytes,
+            "Q8 fused FFN down weight range overflow");
+
+    if (gate_weight_end > weights.size() ||
+        up_weight_end > weights.size() ||
+        down_weight_end > weights.size()) {
+        throw std::runtime_error(
+            "Q8 fused FFN weight buffer is too small");
+    }
+
+    const VkDeviceSize input_bytes =
+        static_cast<VkDeviceSize>(input_dim) *
+        sizeof(float);
+    const VkDeviceSize ffn_bytes =
+        static_cast<VkDeviceSize>(ffn_dim) *
+        sizeof(float);
+    const VkDeviceSize output_bytes =
+        static_cast<VkDeviceSize>(output_dim) *
+        sizeof(float);
+
+    const auto align_up =
+        [&](VkDeviceSize value) -> VkDeviceSize {
+        const VkDeviceSize alignment =
+            std::max<VkDeviceSize>(
+                1,
+                storage_buffer_alignment_);
+        const VkDeviceSize remainder =
+            value % alignment;
+        if (remainder == 0) {
+            return value;
+        }
+        const VkDeviceSize delta =
+            alignment - remainder;
+        if (value >
+            std::numeric_limits<VkDeviceSize>::max() -
+                delta) {
+            throw std::runtime_error(
+                "Q8 fused FFN workspace alignment overflow");
+        }
+        return value + delta;
+    };
+
+    const VkDeviceSize gate_offset = 0;
+    const VkDeviceSize up_offset =
+        align_up(ffn_bytes);
+    const VkDeviceSize final_offset =
+        align_up(
+            checked_add(
+                up_offset,
+                ffn_bytes,
+                "Q8 fused FFN workspace overflow"));
+    const VkDeviceSize required_workspace =
+        checked_add(
+            final_offset,
+            output_bytes,
+            "Q8 fused FFN workspace overflow");
+
+    if (input_bytes > input.size() ||
+        input_bytes > staging_input.size() ||
+        host_input_bytes <
+            static_cast<std::size_t>(input_bytes) ||
+        required_workspace > workspace.size() ||
+        output_bytes > staging_output.size() ||
+        host_output_bytes <
+            static_cast<std::size_t>(output_bytes)) {
+        throw std::runtime_error(
+            "Q8 fused FFN activation/staging buffer is too small");
+    }
+
+    staging_input.upload(
+        host_input,
+        static_cast<std::size_t>(input_bytes));
+
+    const bool descriptors_changed =
+        !ffn_descriptors_valid_ ||
+        ffn_bound_weights_ != weights.handle() ||
+        ffn_bound_input_ != input.handle() ||
+        ffn_bound_workspace_ != workspace.handle() ||
+        ffn_bound_staging_input_ !=
+            staging_input.handle() ||
+        ffn_bound_staging_output_ !=
+            staging_output.handle() ||
+        ffn_bound_input_dim_ != input_dim ||
+        ffn_bound_ffn_dim_ != ffn_dim ||
+        ffn_bound_output_dim_ != output_dim;
+
+    if (descriptors_changed) {
+        const auto update_q8_set =
+            [&](VkDescriptorSet set,
+                VkBuffer input_buffer,
+                VkDeviceSize input_offset,
+                VkDeviceSize input_range,
+                VkDeviceSize output_offset,
+                VkDeviceSize output_range) {
+
+            std::array<VkDescriptorBufferInfo, 3>
+                infos{{
+                    {
+                        weights.handle(),
+                        0,
+                        weights.size(),
+                    },
+                    {
+                        input_buffer,
+                        input_offset,
+                        input_range,
+                    },
+                    {
+                        workspace.handle(),
+                        output_offset,
+                        output_range,
+                    },
+                }};
+
+            std::array<VkWriteDescriptorSet, 3>
+                writes{};
+            for (std::uint32_t binding = 0;
+                 binding < writes.size();
+                 ++binding) {
+                writes[binding].sType =
+                    VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                writes[binding].dstSet = set;
+                writes[binding].dstBinding =
+                    binding;
+                writes[binding].descriptorCount = 1;
+                writes[binding].descriptorType =
+                    VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+                writes[binding].pBufferInfo =
+                    &infos[binding];
+            }
+
+            vkUpdateDescriptorSets(
+                context_.device(),
+                static_cast<std::uint32_t>(
+                    writes.size()),
+                writes.data(),
+                0,
+                nullptr);
+        };
+
+        update_q8_set(
+            ffn_q8_sets_[0],
+            input.handle(),
+            0,
+            input_bytes,
+            gate_offset,
+            ffn_bytes);
+
+        update_q8_set(
+            ffn_q8_sets_[1],
+            input.handle(),
+            0,
+            input_bytes,
+            up_offset,
+            ffn_bytes);
+
+        update_q8_set(
+            ffn_q8_sets_[2],
+            workspace.handle(),
+            gate_offset,
+            ffn_bytes,
+            final_offset,
+            output_bytes);
+
+        std::array<VkDescriptorBufferInfo, 2>
+            gelu_infos{{
+                {
+                    workspace.handle(),
+                    gate_offset,
+                    ffn_bytes,
+                },
+                {
+                    workspace.handle(),
+                    up_offset,
+                    ffn_bytes,
+                },
+            }};
+
+        std::array<VkWriteDescriptorSet, 2>
+            gelu_writes{};
+        for (std::uint32_t binding = 0;
+             binding < gelu_writes.size();
+             ++binding) {
+            gelu_writes[binding].sType =
+                VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            gelu_writes[binding].dstSet =
+                ffn_gelu_set_;
+            gelu_writes[binding].dstBinding =
+                binding;
+            gelu_writes[binding].descriptorCount = 1;
+            gelu_writes[binding].descriptorType =
+                VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            gelu_writes[binding].pBufferInfo =
+                &gelu_infos[binding];
+        }
+
+        vkUpdateDescriptorSets(
+            context_.device(),
+            static_cast<std::uint32_t>(
+                gelu_writes.size()),
+            gelu_writes.data(),
+            0,
+            nullptr);
+
+        ffn_bound_weights_ = weights.handle();
+        ffn_bound_input_ = input.handle();
+        ffn_bound_workspace_ = workspace.handle();
+        ffn_bound_staging_input_ =
+            staging_input.handle();
+        ffn_bound_staging_output_ =
+            staging_output.handle();
+        ffn_bound_input_dim_ = input_dim;
+        ffn_bound_ffn_dim_ = ffn_dim;
+        ffn_bound_output_dim_ = output_dim;
+        ffn_descriptors_valid_ = true;
+        ffn_command_cache_.clear();
+    }
+
+    const FfnDispatchKey key{
+        gate_weight_byte_offset,
+        up_weight_byte_offset,
+        down_weight_byte_offset,
+        input_dim,
+        ffn_dim,
+        output_dim,
+    };
+
+    VkCommandBuffer command = VK_NULL_HANDLE;
+
+    if (const auto it =
+            ffn_command_cache_.find(key);
+        it != ffn_command_cache_.end()) {
+        command = it->second;
+    } else {
+        VkCommandBufferAllocateInfo allocate{};
+        allocate.sType =
+            VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+        allocate.commandPool = command_pool_;
+        allocate.level =
+            VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        allocate.commandBufferCount = 1;
+
+        check(
+            vkAllocateCommandBuffers(
+                context_.device(),
+                &allocate,
+                &command),
+            "vkAllocateCommandBuffers failed for fused FFN");
+
+        try {
+            VkCommandBufferBeginInfo begin{};
+            begin.sType =
+                VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+            begin.flags =
+                VK_COMMAND_BUFFER_USAGE_SIMULTANEOUS_USE_BIT;
+
+            check(
+                vkBeginCommandBuffer(
+                    command,
+                    &begin),
+                "vkBeginCommandBuffer failed for fused FFN");
+
+            VkBufferCopy input_copy{};
+            input_copy.size = input_bytes;
+
+            vkCmdCopyBuffer(
+                command,
+                staging_input.handle(),
+                input.handle(),
+                1,
+                &input_copy);
+
+            VkMemoryBarrier upload_barrier{};
+            upload_barrier.sType =
+                VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+            upload_barrier.srcAccessMask =
+                VK_ACCESS_TRANSFER_WRITE_BIT;
+            upload_barrier.dstAccessMask =
+                VK_ACCESS_SHADER_READ_BIT;
+
+            vkCmdPipelineBarrier(
+                command,
+                VK_PIPELINE_STAGE_TRANSFER_BIT,
+                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                0,
+                1,
+                &upload_barrier,
+                0,
+                nullptr,
+                0,
+                nullptr);
+
+            vkCmdBindPipeline(
+                command,
+                VK_PIPELINE_BIND_POINT_COMPUTE,
+                pipeline_);
+
+            const auto dispatch_q8 =
+                [&](VkDescriptorSet set,
+                    std::uint32_t weight_offset,
+                    std::uint32_t in_dim,
+                    std::uint32_t out_dim) {
+
+                constexpr std::uint32_t
+                    kMaxGroupsX = 65535u;
+                constexpr std::uint32_t
+                    kMaxGroupsY = 65535u;
+
+                const std::uint32_t groups_x =
+                    std::min(
+                        out_dim,
+                        kMaxGroupsX);
+                const std::uint64_t groups_y_64 =
+                    (static_cast<std::uint64_t>(
+                         out_dim) +
+                     groups_x - 1u) /
+                    groups_x;
+
+                if (groups_y_64 > kMaxGroupsY) {
+                    throw std::runtime_error(
+                        "Q8 fused FFN output dimension exceeds dispatch capacity");
+                }
+
+                vkCmdBindDescriptorSets(
+                    command,
+                    VK_PIPELINE_BIND_POINT_COMPUTE,
+                    pipeline_layout_,
+                    0,
+                    1,
+                    &set,
+                    0,
+                    nullptr);
+
+                const Push push{
+                    weight_offset,
+                    in_dim,
+                    out_dim,
+                    groups_x,
+                };
+
+                vkCmdPushConstants(
+                    command,
+                    pipeline_layout_,
+                    VK_SHADER_STAGE_COMPUTE_BIT,
+                    0,
+                    sizeof(push),
+                    &push);
+
+                vkCmdDispatch(
+                    command,
+                    groups_x,
+                    static_cast<std::uint32_t>(
+                        groups_y_64),
+                    1);
+            };
+
+            dispatch_q8(
+                ffn_q8_sets_[0],
+                gate_weight_byte_offset,
+                input_dim,
+                ffn_dim);
+            dispatch_q8(
+                ffn_q8_sets_[1],
+                up_weight_byte_offset,
+                input_dim,
+                ffn_dim);
+
+            VkMemoryBarrier q8_to_gelu{};
+            q8_to_gelu.sType =
+                VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+            q8_to_gelu.srcAccessMask =
+                VK_ACCESS_SHADER_WRITE_BIT;
+            q8_to_gelu.dstAccessMask =
+                VK_ACCESS_SHADER_READ_BIT |
+                VK_ACCESS_SHADER_WRITE_BIT;
+
+            vkCmdPipelineBarrier(
+                command,
+                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                0,
+                1,
+                &q8_to_gelu,
+                0,
+                nullptr,
+                0,
+                nullptr);
+
+            vkCmdBindPipeline(
+                command,
+                VK_PIPELINE_BIND_POINT_COMPUTE,
+                gelu_pipeline_);
+            vkCmdBindDescriptorSets(
+                command,
+                VK_PIPELINE_BIND_POINT_COMPUTE,
+                gelu_pipeline_layout_,
+                0,
+                1,
+                &ffn_gelu_set_,
+                0,
+                nullptr);
+
+            vkCmdPushConstants(
+                command,
+                gelu_pipeline_layout_,
+                VK_SHADER_STAGE_COMPUTE_BIT,
+                0,
+                sizeof(ffn_dim),
+                &ffn_dim);
+
+            const std::uint32_t gelu_groups =
+                (ffn_dim + 255u) / 256u;
+            vkCmdDispatch(
+                command,
+                gelu_groups,
+                1,
+                1);
+
+            VkMemoryBarrier gelu_to_down{};
+            gelu_to_down.sType =
+                VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+            gelu_to_down.srcAccessMask =
+                VK_ACCESS_SHADER_WRITE_BIT;
+            gelu_to_down.dstAccessMask =
+                VK_ACCESS_SHADER_READ_BIT;
+
+            vkCmdPipelineBarrier(
+                command,
+                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                0,
+                1,
+                &gelu_to_down,
+                0,
+                nullptr,
+                0,
+                nullptr);
+
+            vkCmdBindPipeline(
+                command,
+                VK_PIPELINE_BIND_POINT_COMPUTE,
+                pipeline_);
+            dispatch_q8(
+                ffn_q8_sets_[2],
+                down_weight_byte_offset,
+                ffn_dim,
+                output_dim);
+
+            VkMemoryBarrier down_to_copy{};
+            down_to_copy.sType =
+                VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+            down_to_copy.srcAccessMask =
+                VK_ACCESS_SHADER_WRITE_BIT;
+            down_to_copy.dstAccessMask =
+                VK_ACCESS_TRANSFER_READ_BIT;
+
+            vkCmdPipelineBarrier(
+                command,
+                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                VK_PIPELINE_STAGE_TRANSFER_BIT,
+                0,
+                1,
+                &down_to_copy,
+                0,
+                nullptr,
+                0,
+                nullptr);
+
+            VkBufferCopy output_copy{};
+            output_copy.srcOffset =
+                final_offset;
+            output_copy.dstOffset = 0;
+            output_copy.size =
+                output_bytes;
+
+            vkCmdCopyBuffer(
+                command,
+                workspace.handle(),
+                staging_output.handle(),
+                1,
+                &output_copy);
+
+            VkMemoryBarrier host_barrier{};
+            host_barrier.sType =
+                VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+            host_barrier.srcAccessMask =
+                VK_ACCESS_TRANSFER_WRITE_BIT;
+            host_barrier.dstAccessMask =
+                VK_ACCESS_HOST_READ_BIT;
+
+            vkCmdPipelineBarrier(
+                command,
+                VK_PIPELINE_STAGE_TRANSFER_BIT,
+                VK_PIPELINE_STAGE_HOST_BIT,
+                0,
+                1,
+                &host_barrier,
+                0,
+                nullptr,
+                0,
+                nullptr);
+
+            check(
+                vkEndCommandBuffer(command),
+                "vkEndCommandBuffer failed for fused FFN");
+
+            ffn_command_cache_.emplace(
+                key,
+                command);
+        } catch (...) {
+            if (command != VK_NULL_HANDLE) {
+                vkFreeCommandBuffers(
+                    context_.device(),
+                    command_pool_,
+                    1,
+                    &command);
+            }
+            throw;
+        }
+    }
+
+    check(
+        vkResetFences(
+            context_.device(),
+            1,
+            &fence_),
+        "vkResetFences failed for fused FFN");
+
+    VkSubmitInfo submit{};
+    submit.sType =
+        VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submit.commandBufferCount = 1;
+    submit.pCommandBuffers = &command;
+
+    check(
+        vkQueueSubmit(
+            context_.compute_queue(),
+            1,
+            &submit,
+            fence_),
+        "vkQueueSubmit failed for fused FFN");
+
+    check(
+        vkWaitForFences(
+            context_.device(),
+            1,
+            &fence_,
+            VK_TRUE,
+            UINT64_MAX),
+        "vkWaitForFences failed for fused FFN");
+
+    staging_output.download(
+        host_output,
+        static_cast<std::size_t>(
+            output_bytes));
+}
+
+
 void Q8MatVecPipeline::run_staged_pair(
     Buffer& weights,
     Buffer& input,
