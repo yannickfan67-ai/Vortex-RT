@@ -55,7 +55,8 @@ public:
         const std::string& q8_matvec_u8_spirv = {},
         const std::string& argmax_spirv = {},
         const std::string& q8_matvec_32_spirv = {},
-        const std::string& q8_matvec_u8_32_spirv = {});
+        const std::string& q8_matvec_u8_32_spirv = {},
+        const std::string& gelu_mul_spirv = {});
 
     [[nodiscard]] const Gemma3Config& config() const noexcept {
         return config_;
@@ -67,6 +68,10 @@ public:
 
     [[nodiscard]] std::uint32_t narrow_q8_lane_count() const noexcept {
         return q8_pipeline_32_ ? 32u : 64u;
+    }
+
+    [[nodiscard]] bool fused_ffn_enabled() const noexcept {
+        return fuse_projections_ && q8_pipeline_.ffn_available();
     }
 
     [[nodiscard]] Gemma3SingleTokenResult run_single_token(
