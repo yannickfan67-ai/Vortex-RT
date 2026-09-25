@@ -29,7 +29,7 @@ The runtime foundation is now usable rather than just a compile-only bring-up:
 - GGUF SentencePiece-style prompt tokenization + prompt prefill
 - tied LM head with GPU greedy argmax; full top-k diagnostic path remains available
 - real Gemma 3 270M Q8_0 text generation in CI on Lavapipe CPU Vulkan
-- CPU Vulkan automatically keeps conservative 64-lane/non-fused projection paths when fusion is slower; hardware GPUs enable projection/FFN fusion
+- adaptive Q8 lane selection follows Vulkan subgroup width (8/16/32, with 64-lane fallback); CPU Vulkan keeps projection fusion off by default while hardware GPUs enable it
 - load / forward / generation timing and tokens-per-second reporting, including selected Q8 lane width and fusion state
 
 ## Goals
@@ -117,7 +117,7 @@ For multi-GPU performance testing, run the same prompt once on each device and c
 .\build\Release\vortexrt-gemma.exe gemma-3-270m-Q8_0.gguf --device 1 --prompt "Hello" --generate 32
 ```
 
-On software CPU Vulkan such as Lavapipe, projection fusion and the real-model fused FFN are intentionally disabled because CI measurements showed those multi-dispatch paths can be slower there. The fused GPU FFN is still executed by a dedicated synthetic correctness test in CI, so the hardware-GPU path is validated even though the real model runs on a CPU Vulkan driver.
+On software CPU Vulkan such as Lavapipe, projection fusion remains disabled by default because end-to-end CI measurements show it is slower there. Q8 workgroup width is still adapted to the reported subgroup size; on the current Lavapipe runner, the 8-lane path is substantially faster than the old 64-lane default. The fused FFN is also covered by a dedicated correctness test and can be forced from the CLI for A/B measurements.
 
 ## Benchmark controls
 
@@ -166,6 +166,15 @@ Select a specific Vulkan device when needed:
 ```bash
 ./build/vortexrt-gemma gemma-3-270m-Q8_0.gguf --device 1 --prompt "Hello" --generate 16
 ```
+
+Override runtime tuning for controlled A/B measurements:
+
+```bash
+./build/vortexrt-gemma gemma-3-270m-Q8_0.gguf --q8-lanes 8 --projection-fusion off --generate 16
+./build/vortexrt-gemma gemma-3-270m-Q8_0.gguf --q8-lanes 32 --projection-fusion on --generate 16
+```
+
+`--q8-lanes` accepts `auto|8|16|32|64`; `--projection-fusion` accepts `auto|on|off`. The default `auto` policy preserves device-adaptive behavior.
 
 The CLI reports model-load time, forward/generation time and generation throughput. GitHub Actions also runs the real model on Mesa Lavapipe and verifies deterministic token generation, prompt prefilling and the fused Q8 projection paths.
 
