@@ -21,6 +21,7 @@ struct Options {
     std::string device;
     std::uint32_t token_id = 2;
     std::size_t top_k = 8;
+    std::size_t generate_tokens = 0;
 };
 
 std::uint32_t parse_u32(
@@ -61,7 +62,7 @@ Options parse_options(int argc, char** argv) {
     if (argc < 2) {
         throw std::runtime_error(
             "usage: vortexrt-gemma <model.gguf> "
-            "[--token-id N] [--top-k N] "
+            "[--token-id N] [--top-k N] [--generate N] "
             "[--device <index|name>]");
     }
 
@@ -90,6 +91,11 @@ Options parse_options(int argc, char** argv) {
                 parse_size(
                     next("--top-k"),
                     "--top-k");
+        } else if (arg == "--generate") {
+            options.generate_tokens =
+                parse_size(
+                    next("--generate"),
+                    "--generate");
         } else if (arg == "--device") {
             options.device = next("--device");
         } else if (arg == "--help" ||
@@ -97,7 +103,8 @@ Options parse_options(int argc, char** argv) {
             std::cout
                 << "usage: vortexrt-gemma <model.gguf> [options]\n"
                 << "  --token-id N          input token id (default: 2/BOS)\n"
-                << "  --top-k N             compute/display top logits; 0 skips LM head\n"
+                << "  --top-k N             display top logits; 0 skips LM head\n"
+                << "  --generate N          greedy-generate N tokens from BOS with KV cache\n"
                 << "  --device <index|name> Vulkan device selector\n";
             std::exit(0);
         } else {
@@ -151,10 +158,9 @@ int main(int argc, char** argv) {
         const auto& config = model.config();
 
         std::cout
-            << "Vortex-RT Gemma 3 single-token bring-up\n"
+            << "Vortex-RT Gemma 3 runtime\n"
             << "  GPU: "
             << context.capabilities().name << "\n"
-            << "  Token: " << options.token_id << "\n"
             << "  Layers: " << config.block_count << "\n"
             << "  Hidden: "
             << config.embedding_length << "\n"
@@ -166,8 +172,32 @@ int main(int argc, char** argv) {
             << "\n"
             << "  Head dim: "
             << config.head_dim << "\n"
+            << "  Sliding window: "
+            << config.sliding_window << "\n"
             << "  Vocab: "
             << config.vocab_size << "\n";
+
+        if (options.generate_tokens != 0) {
+            const auto generated =
+                model.generate_greedy_from_bos(
+                    options.generate_tokens);
+
+            std::cout << "  Generated token ids:";
+            for (const auto id : generated.token_ids) {
+                std::cout << " " << id;
+            }
+            std::cout << "\n";
+
+            std::cout
+                << "  Generated text: \""
+                << escape_piece(generated.text)
+                << "\"\n"
+                << "  Validation: OK\n";
+            return 0;
+        }
+
+        std::cout
+            << "  Token: " << options.token_id << "\n";
 
         const auto result =
             model.run_single_token(
