@@ -53,7 +53,9 @@ public:
         VulkanContext& context,
         const std::string& q8_matvec_spirv,
         const std::string& q8_matvec_u8_spirv = {},
-        const std::string& argmax_spirv = {});
+        const std::string& argmax_spirv = {},
+        const std::string& q8_matvec_32_spirv = {},
+        const std::string& q8_matvec_u8_32_spirv = {});
 
     [[nodiscard]] const Gemma3Config& config() const noexcept {
         return config_;
@@ -90,6 +92,9 @@ private:
         std::vector<std::vector<float>> keys;
         std::vector<std::vector<float>> values;
     };
+
+    [[nodiscard]] Q8MatVecPipeline& q8_pipeline_for(
+        std::size_t input_dim) noexcept;
 
     [[nodiscard]] std::vector<float> run_q8_matvec(
         const std::string& tensor_name,
@@ -148,6 +153,7 @@ private:
     GgufFile gguf_;
     VulkanContext& context_;
     Q8MatVecPipeline q8_pipeline_;
+    std::unique_ptr<Q8MatVecPipeline> q8_pipeline_32_;
     std::unique_ptr<ArgmaxPipeline> argmax_pipeline_;
     Gemma3Config config_{};
     bool fuse_projections_ = true;
