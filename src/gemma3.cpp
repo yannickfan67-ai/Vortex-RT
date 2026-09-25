@@ -74,7 +74,9 @@ Gemma3Model::Gemma3Model(
     VulkanContext& context,
     const std::string& q8_matvec_spirv,
     const std::string& q8_matvec_u8_spirv,
-    const std::string& argmax_spirv)
+    const std::string& argmax_spirv,
+    const std::string& q8_matvec_32_spirv,
+    const std::string& q8_matvec_u8_32_spirv)
     : gguf_(gguf_path),
       context_(context),
       q8_pipeline_(
@@ -85,6 +87,19 @@ Gemma3Model::Gemma3Model(
     fuse_projections_ =
         context_.capabilities().device_type !=
         VK_PHYSICAL_DEVICE_TYPE_CPU;
+
+    const auto subgroup_size =
+        context_.capabilities().subgroup_size;
+
+    if (!q8_matvec_32_spirv.empty() &&
+        subgroup_size != 0 &&
+        subgroup_size <= 32u) {
+        q8_pipeline_32_ =
+            std::make_unique<Q8MatVecPipeline>(
+                context_,
+                q8_matvec_32_spirv,
+                q8_matvec_u8_32_spirv);
+    }
 
     const auto architecture =
         gguf_.metadata_string("general.architecture");
@@ -341,6 +356,22 @@ Gemma3Model::Gemma3Model(
     }
 }
 
+Q8MatVecPipeline& Gemma3Model::q8_pipeline_for(
+    std::size_t input_dim) noexcept {
+
+    // 640-wide and 1024-wide Gemma projections contain only
+    // 20 and 32 Q8 blocks respectively.  On subgroup-32-or-
+    // smaller devices the 32-lane variant avoids wasting half
+    // or more of a 64-lane workgroup.  The 2048-wide FFN down
+    // projection keeps the 64-lane path.
+    if (q8_pipeline_32_ &&
+        input_dim <= 1024u) {
+        return *q8_pipeline_32_;
+    }
+
+    return q8_pipeline_;
+}
+
 std::size_t Gemma3Model::run_q8_matvec_to_output(
     const std::string& tensor_name,
     const std::vector<float>& input) {
@@ -366,7 +397,7 @@ std::size_t Gemma3Model::run_q8_matvec_to_output(
             "Gemma 3 weight arena is not initialized");
     }
 
-    q8_pipeline_.run_staged(
+    q8_pipeline_for(input.size()).run_staged(
         *weights_arena_,
         *activation_input_,
         *activation_output_,
@@ -418,7 +449,7 @@ std::vector<float> Gemma3Model::run_q8_matvec(
 
     std::vector<float> output(output_elements);
 
-    q8_pipeline_.run_staged(
+    q8_pipeline_for(input.size()).run_staged(
         *weights_arena_,
         *activation_input_,
         *activation_output_,
@@ -488,7 +519,7 @@ std::array<std::vector<float>, 2> Gemma3Model::run_q8_pair(
 
     std::vector<float> packed(total_elements);
 
-    q8_pipeline_.run_staged_pair(
+    q8_pipeline_for(input.size()).run_staged_pair(
         *weights_arena_,
         *activation_input_,
         *activation_output_,
@@ -577,7 +608,7 @@ std::array<std::vector<float>, 3> Gemma3Model::run_q8_triplet(
 
     std::vector<float> packed(total_elements);
 
-    q8_pipeline_.run_staged_triplet(
+    q8_pipeline_for(input.size()).run_staged_triplet(
         *weights_arena_,
         *activation_input_,
         *activation_output_,
