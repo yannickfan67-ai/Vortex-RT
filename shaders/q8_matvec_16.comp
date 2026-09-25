@@ -1,0 +1,105 @@
+#version 450
+
+layout(local_size_x = 16, local_size_y = 1, local_size_z = 1) in;
+
+layout(set=0,binding=0,std430) readonly buffer WeightWords {
+    uint data[];
+} weights;
+layout(set=0,binding=1,std430) readonly buffer Input {
+    float data[];
+} x;
+layout(set=0,binding=2,std430) writeonly buffer Output {
+    float data[];
+} y;
+
+layout(push_constant) uniform Params {
+    uint byte_offset;
+    uint input_dim;
+    uint output_dim;
+    uint groups_x;
+} p;
+
+shared float partial[16];
+
+uint load_u8(uint byte_index) {
+    const uint word =
+        weights.data[byte_index >> 2u];
+    const uint shift =
+        (byte_index & 3u) * 8u;
+    return (word >> shift) & 0xffu;
+}
+
+float load_f16(uint byte_index) {
+    const uint bits =
+        load_u8(byte_index) |
+        (load_u8(byte_index + 1u) << 8u);
+    return unpackHalf2x16(bits).x;
+}
+
+void main() {
+    const uint row =
+        gl_WorkGroupID.x +
+        gl_WorkGroupID.y * p.groups_x;
+    const uint lane =
+        gl_LocalInvocationID.x;
+
+    if (row >= p.output_dim) {
+        return;
+    }
+
+    const uint blocks =
+        p.input_dim / 32u;
+    const uint row_base =
+        p.byte_offset +
+        row * blocks * 34u;
+
+    float sum = 0.0;
+
+    for (uint block = lane;
+         block < blocks;
+         block += 16u) {
+
+        const uint block_base =
+            row_base + block * 34u;
+        const float scale =
+            load_f16(block_base);
+        const uint input_base =
+            block * 32u;
+
+        for (uint k = 0u;
+             k < 32u;
+             ++k) {
+
+            const uint raw =
+                load_u8(
+                    block_base + 2u + k);
+            const int q =
+                raw >= 128u
+                    ? int(raw) - 256
+                    : int(raw);
+
+            sum +=
+                scale *
+                float(q) *
+                x.data[input_base + k];
+        }
+    }
+
+    partial[lane] = sum;
+    barrier();
+
+    for (uint stride = 8u;
+         stride > 0u;
+         stride >>= 1u) {
+        if (lane < stride) {
+            partial[lane] +=
+                partial[lane + stride];
+        }
+        barrier();
+    }
+
+    if (lane == 0u) {
+        y.data[row] =
+            partial[0];
+    }
+}
