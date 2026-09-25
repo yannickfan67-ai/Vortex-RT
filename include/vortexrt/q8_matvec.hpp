@@ -112,6 +112,19 @@ private:
         std::size_t operator()(const DispatchKey& key) const noexcept;
     };
 
+    struct StagedDispatchKey {
+        std::uint32_t weight_byte_offset = 0;
+        std::uint32_t input_dim = 0;
+        std::uint32_t output_dim = 0;
+        bool readback = false;
+
+        bool operator==(const StagedDispatchKey&) const noexcept = default;
+    };
+
+    struct StagedDispatchKeyHash {
+        std::size_t operator()(const StagedDispatchKey& key) const noexcept;
+    };
+
     struct FfnDispatchKey {
         std::uint32_t gate_weight_byte_offset = 0;
         std::uint32_t up_weight_byte_offset = 0;
@@ -131,6 +144,8 @@ private:
 
     [[nodiscard]] VkCommandBuffer get_or_record_command(
         const DispatchKey& key);
+
+    void clear_staged_command_cache() noexcept;
 
     VulkanContext& context_;
     bool using_native_u8_ = false;
@@ -171,6 +186,9 @@ private:
     VkDeviceSize bound_input_size_ = 0;
     VkDeviceSize bound_output_size_ = 0;
 
+    VkBuffer staged_bound_staging_input_ = VK_NULL_HANDLE;
+    VkBuffer staged_bound_staging_output_ = VK_NULL_HANDLE;
+
     VkBuffer pair_bound_weights_ = VK_NULL_HANDLE;
     VkBuffer pair_bound_input_ = VK_NULL_HANDLE;
     VkBuffer pair_bound_output_ = VK_NULL_HANDLE;
@@ -199,6 +217,11 @@ private:
         DispatchKey,
         VkCommandBuffer,
         DispatchKeyHash> command_cache_;
+
+    std::unordered_map<
+        StagedDispatchKey,
+        VkCommandBuffer,
+        StagedDispatchKeyHash> staged_command_cache_;
 
     std::unordered_map<
         FfnDispatchKey,
