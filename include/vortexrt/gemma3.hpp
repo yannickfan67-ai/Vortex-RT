@@ -117,6 +117,22 @@ private:
         std::deque<std::vector<float>> values;
     };
 
+    struct LayerTensorNames {
+        std::string attn_norm;
+        std::string attn_q_norm;
+        std::string attn_k_norm;
+        std::string post_attention_norm;
+        std::string ffn_norm;
+        std::string post_ffw_norm;
+        std::string attn_q;
+        std::string attn_k;
+        std::string attn_v;
+        std::string attn_output;
+        std::string ffn_gate;
+        std::string ffn_up;
+        std::string ffn_down;
+    };
+
     [[nodiscard]] Q8MatVecPipeline& q8_pipeline_for(
         std::size_t input_dim) noexcept;
 
@@ -208,6 +224,7 @@ private:
     std::unique_ptr<Buffer> staging_input_;
     std::unique_ptr<Buffer> staging_output_;
     std::unique_ptr<Buffer> argmax_output_;
+    std::vector<LayerTensorNames> layer_tensor_names_;
     std::vector<LayerKvCache> kv_cache_;
     std::uint32_t next_position_ = 0;
 };
