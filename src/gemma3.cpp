@@ -256,6 +256,18 @@ Gemma3Model::Gemma3Model(
             "and equal key/value head dimensions");
     }
 
+    token_embedding_tensor_ =
+        embedding;
+    embedding_scale_ =
+        std::sqrt(
+            static_cast<float>(
+                config_.embedding_length));
+    attention_scale_ =
+        1.0f /
+        std::sqrt(
+            static_cast<float>(
+                config_.head_dim));
+
     local_rope_inverse_frequencies_ =
         build_rope_inverse_frequencies(
             config_.head_dim,
@@ -1094,22 +1106,25 @@ std::vector<float> Gemma3Model::token_embedding(
             "Token id is outside Gemma 3 vocabulary");
     }
 
-    const auto* embedding =
-        require_tensor(gguf_, "token_embd.weight");
-    auto values =
-        gguf_.read_q8_0_row(*embedding, token_id);
+    if (token_embedding_tensor_ == nullptr) {
+        throw std::runtime_error(
+            "Token embedding tensor is unavailable");
+    }
 
-    if (values.size() != config_.embedding_length) {
+    auto values =
+        gguf_.read_q8_0_row(
+            *token_embedding_tensor_,
+            token_id);
+
+    if (values.size() !=
+        config_.embedding_length) {
         throw std::runtime_error(
             "Token embedding row has wrong width");
     }
 
-    const float scale =
-        std::sqrt(
-            static_cast<float>(
-                config_.embedding_length));
     for (auto& value : values) {
-        value *= scale;
+        value *=
+            embedding_scale_;
     }
 
     return values;
@@ -1588,12 +1603,6 @@ Gemma3SingleTokenResult Gemma3Model::decode_token(
 
             const std::size_t history =
                 cache.keys.size();
-            const float attention_scale =
-                1.0f /
-                std::sqrt(
-                    static_cast<float>(
-                        config_.head_dim));
-
             attention.assign(
                 static_cast<std::size_t>(
                     config_.head_count) *
@@ -1632,7 +1641,7 @@ Gemma3SingleTokenResult Gemma3Model::decode_token(
 
                     scores[t] =
                         static_cast<float>(dot) *
-                        attention_scale;
+                        attention_scale_;
                     max_score =
                         std::max(
                             max_score,
