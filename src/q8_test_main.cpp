@@ -2,6 +2,7 @@
 #include "vortexrt/q8_matvec.hpp"
 
 #include <algorithm>
+#include <array>
 #include <bit>
 #include <cmath>
 #include <cstdint>
@@ -195,6 +196,164 @@ int main() {
         if (max_error > 2e-3f) {
             throw std::runtime_error(
                 "Q8_0 Vulkan matvec mismatch");
+        }
+
+        const std::size_t matrix_bytes =
+            quantized.size();
+
+        std::vector<std::uint8_t> multi_quantized(
+            matrix_bytes * 3u);
+        for (std::size_t copy = 0;
+             copy < 3;
+             ++copy) {
+            std::copy(
+                quantized.begin(),
+                quantized.end(),
+                multi_quantized.begin() +
+                    static_cast<std::ptrdiff_t>(
+                        copy * matrix_bytes));
+        }
+
+        vortexrt::Buffer multi_weights(
+            context,
+            multi_quantized.size(),
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+            VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+
+        vortexrt::Buffer fused_input(
+            context,
+            kInput * sizeof(float),
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+            VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+
+        vortexrt::Buffer fused_output(
+            context,
+            3u * kOutput * sizeof(float),
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+            VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+
+        vortexrt::Buffer staging_input(
+            context,
+            kInput * sizeof(float),
+            VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+
+        vortexrt::Buffer staging_output(
+            context,
+            3u * kOutput * sizeof(float),
+            VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+
+        multi_weights.upload(
+            multi_quantized.data(),
+            multi_quantized.size());
+
+        const auto stride =
+            static_cast<std::uint32_t>(
+                matrix_bytes);
+
+        std::vector<float> pair_output(
+            2u * kOutput);
+
+        pipeline.run_staged_pair(
+            multi_weights,
+            fused_input,
+            fused_output,
+            staging_input,
+            staging_output,
+            input.data(),
+            input.size() * sizeof(float),
+            pair_output.data(),
+            pair_output.size() * sizeof(float),
+            std::array<std::uint32_t, 2>{
+                0u,
+                stride,
+            },
+            kInput,
+            std::array<std::uint32_t, 2>{
+                kOutput,
+                kOutput,
+            });
+
+        float pair_max_error = 0.0f;
+        for (std::size_t copy = 0;
+             copy < 2;
+             ++copy) {
+            for (std::uint32_t row = 0;
+                 row < kOutput;
+                 ++row) {
+                pair_max_error =
+                    std::max(
+                        pair_max_error,
+                        std::fabs(
+                            pair_output[
+                                copy * kOutput +
+                                row] -
+                            reference[row]));
+            }
+        }
+
+        std::vector<float> triplet_output(
+            3u * kOutput);
+
+        pipeline.run_staged_triplet(
+            multi_weights,
+            fused_input,
+            fused_output,
+            staging_input,
+            staging_output,
+            input.data(),
+            input.size() * sizeof(float),
+            triplet_output.data(),
+            triplet_output.size() * sizeof(float),
+            std::array<std::uint32_t, 3>{
+                0u,
+                stride,
+                2u * stride,
+            },
+            kInput,
+            std::array<std::uint32_t, 3>{
+                kOutput,
+                kOutput,
+                kOutput,
+            });
+
+        float triplet_max_error = 0.0f;
+        for (std::size_t copy = 0;
+             copy < 3;
+             ++copy) {
+            for (std::uint32_t row = 0;
+                 row < kOutput;
+                 ++row) {
+                triplet_max_error =
+                    std::max(
+                        triplet_max_error,
+                        std::fabs(
+                            triplet_output[
+                                copy * kOutput +
+                                row] -
+                            reference[row]));
+            }
+        }
+
+        std::cout
+            << "  fused pair max abs error: "
+            << pair_max_error
+            << "\n";
+        std::cout
+            << "  fused triplet max abs error: "
+            << triplet_max_error
+            << "\n";
+
+        if (pair_max_error > 2e-3f ||
+            triplet_max_error > 2e-3f) {
+            throw std::runtime_error(
+                "Q8_0 fused Vulkan projection mismatch");
         }
 
         std::cout << "  Validation: OK\n";
