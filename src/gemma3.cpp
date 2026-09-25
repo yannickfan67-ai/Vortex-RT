@@ -283,35 +283,83 @@ Gemma3Model::Gemma3Model(
             "Tokenizer vocabulary does not match token embedding");
     }
 
-    kv_cache_.resize(config_.block_count);
-
-    const auto cache_f32 = [&](const std::string& name) {
-        const auto* tensor = require_tensor(gguf_, name);
-        f32_weights_.emplace(
-            name,
-            gguf_.read_f32_tensor(*tensor));
-    };
-
-    cache_f32("output_norm.weight");
-
-    constexpr const char* kNormSuffixes[] = {
-        "attn_norm.weight",
-        "attn_q_norm.weight",
-        "attn_k_norm.weight",
-        "post_attention_norm.weight",
-        "ffn_norm.weight",
-        "post_ffw_norm.weight",
-    };
+    layer_tensor_names_.reserve(
+        config_.block_count);
 
     for (std::uint32_t layer = 0;
          layer < config_.block_count;
          ++layer) {
-        for (const char* suffix : kNormSuffixes) {
-            cache_f32(
+
+        layer_tensor_names_.push_back(
+            LayerTensorNames{
                 layer_tensor(
                     layer,
-                    suffix));
-        }
+                    "attn_norm.weight"),
+                layer_tensor(
+                    layer,
+                    "attn_q_norm.weight"),
+                layer_tensor(
+                    layer,
+                    "attn_k_norm.weight"),
+                layer_tensor(
+                    layer,
+                    "post_attention_norm.weight"),
+                layer_tensor(
+                    layer,
+                    "ffn_norm.weight"),
+                layer_tensor(
+                    layer,
+                    "post_ffw_norm.weight"),
+                layer_tensor(
+                    layer,
+                    "attn_q.weight"),
+                layer_tensor(
+                    layer,
+                    "attn_k.weight"),
+                layer_tensor(
+                    layer,
+                    "attn_v.weight"),
+                layer_tensor(
+                    layer,
+                    "attn_output.weight"),
+                layer_tensor(
+                    layer,
+                    "ffn_gate.weight"),
+                layer_tensor(
+                    layer,
+                    "ffn_up.weight"),
+                layer_tensor(
+                    layer,
+                    "ffn_down.weight"),
+            });
+    }
+
+    kv_cache_.resize(
+        config_.block_count);
+
+    const auto cache_f32 =
+        [&](const std::string& name) {
+            const auto* tensor =
+                require_tensor(
+                    gguf_,
+                    name);
+            f32_weights_.emplace(
+                name,
+                gguf_.read_f32_tensor(
+                    *tensor));
+        };
+
+    cache_f32(
+        "output_norm.weight");
+
+    for (const auto& names :
+         layer_tensor_names_) {
+        cache_f32(names.attn_norm);
+        cache_f32(names.attn_q_norm);
+        cache_f32(names.attn_k_norm);
+        cache_f32(names.post_attention_norm);
+        cache_f32(names.ffn_norm);
+        cache_f32(names.post_ffw_norm);
     }
 
     const std::uint64_t tensor_data_bytes =
