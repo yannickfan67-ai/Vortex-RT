@@ -256,6 +256,15 @@ Gemma3Model::Gemma3Model(
             "and equal key/value head dimensions");
     }
 
+    local_rope_inverse_frequencies_ =
+        build_rope_inverse_frequencies(
+            config_.head_dim,
+            config_.local_rope_base);
+    global_rope_inverse_frequencies_ =
+        build_rope_inverse_frequencies(
+            config_.head_dim,
+            config_.global_rope_base);
+
     const std::uint64_t q_width =
         static_cast<std::uint64_t>(config_.head_count) *
         config_.head_dim;
@@ -1025,54 +1034,119 @@ bool Gemma3Model::is_global_layer(
     return ((layer + 1u) % 6u) == 0u;
 }
 
-void Gemma3Model::apply_rope(
-    std::vector<float>& values,
-    std::uint32_t head_count,
+std::vector<float> Gemma3Model::build_rope_inverse_frequencies(
     std::uint32_t head_dim,
-    std::uint32_t position,
     float theta) {
 
     if (head_dim == 0 ||
         (head_dim % 2u) != 0u ||
-        values.size() !=
-            static_cast<std::size_t>(head_count) *
-            head_dim ||
         !(theta > 0.0f)) {
         throw std::runtime_error(
-            "Invalid Gemma 3 RoPE shape/configuration");
+            "Invalid Gemma 3 RoPE frequency configuration");
     }
 
-    const std::uint32_t half = head_dim / 2u;
+    const std::uint32_t half =
+        head_dim / 2u;
+
+    std::vector<float> inverse_frequencies(
+        half);
+
+    for (std::uint32_t i = 0;
+         i < half;
+         ++i) {
+        const float exponent =
+            (2.0f * static_cast<float>(i)) /
+            static_cast<float>(head_dim);
+
+        inverse_frequencies[i] =
+            1.0f /
+            std::pow(
+                theta,
+                exponent);
+    }
+
+    return inverse_frequencies;
+}
+
+void Gemma3Model::build_rope_table(
+    const std::vector<float>& inverse_frequencies,
+    std::uint32_t position,
+    std::vector<float>& rope_cos,
+    std::vector<float>& rope_sin) {
+
+    rope_cos.resize(
+        inverse_frequencies.size());
+    rope_sin.resize(
+        inverse_frequencies.size());
+
+    const float position_f =
+        static_cast<float>(position);
+
+    for (std::size_t i = 0;
+         i < inverse_frequencies.size();
+         ++i) {
+        const float angle =
+            position_f *
+            inverse_frequencies[i];
+
+        rope_cos[i] =
+            std::cos(angle);
+        rope_sin[i] =
+            std::sin(angle);
+    }
+}
+
+void Gemma3Model::apply_rope(
+    std::vector<float>& values,
+    std::uint32_t head_count,
+    std::uint32_t head_dim,
+    const std::vector<float>& rope_cos,
+    const std::vector<float>& rope_sin) {
+
+    if (head_dim == 0 ||
+        (head_dim % 2u) != 0u ||
+        values.size() !=
+            static_cast<std::size_t>(
+                head_count) *
+            head_dim ||
+        rope_cos.size() !=
+            head_dim / 2u ||
+        rope_sin.size() !=
+            head_dim / 2u) {
+        throw std::runtime_error(
+            "Invalid Gemma 3 RoPE shape/table");
+    }
+
+    const std::uint32_t half =
+        head_dim / 2u;
 
     for (std::uint32_t head = 0;
          head < head_count;
          ++head) {
         const std::size_t base =
-            static_cast<std::size_t>(head) *
+            static_cast<std::size_t>(
+                head) *
             head_dim;
 
         for (std::uint32_t i = 0;
              i < half;
              ++i) {
-            const float exponent =
-                (2.0f * static_cast<float>(i)) /
-                static_cast<float>(head_dim);
-            const float inverse_frequency =
-                1.0f / std::pow(theta, exponent);
-            const float angle =
-                static_cast<float>(position) *
-                inverse_frequency;
-            const float c = std::cos(angle);
-            const float s = std::sin(angle);
+            const float c =
+                rope_cos[i];
+            const float sin_value =
+                rope_sin[i];
 
-            const float a = values[base + i];
+            const float a =
+                values[base + i];
             const float b =
                 values[base + half + i];
 
             values[base + i] =
-                a * c - b * s;
+                a * c -
+                b * sin_value;
             values[base + half + i] =
-                b * c + a * s;
+                b * c +
+                a * sin_value;
         }
     }
 }
@@ -1130,6 +1204,22 @@ Gemma3SingleTokenResult Gemma3Model::decode_token(
     try {
         std::vector<float> hidden =
             token_embedding(token_id);
+
+        std::vector<float> local_rope_cos;
+        std::vector<float> local_rope_sin;
+        std::vector<float> global_rope_cos;
+        std::vector<float> global_rope_sin;
+
+        build_rope_table(
+            local_rope_inverse_frequencies_,
+            position,
+            local_rope_cos,
+            local_rope_sin);
+        build_rope_table(
+            global_rope_inverse_frequencies_,
+            position,
+            global_rope_cos,
+            global_rope_sin);
 
         for (std::uint32_t layer = 0;
              layer < config_.block_count;
@@ -1201,23 +1291,29 @@ Gemma3SingleTokenResult Gemma3Model::decode_token(
                         layer,
                         "attn_k_norm.weight"));
 
-            const float rope_base =
-                is_global_layer(layer)
-                    ? config_.global_rope_base
-                    : config_.local_rope_base;
+            const bool global_layer =
+                is_global_layer(layer);
+            const auto& rope_cos =
+                global_layer
+                    ? global_rope_cos
+                    : local_rope_cos;
+            const auto& rope_sin =
+                global_layer
+                    ? global_rope_sin
+                    : local_rope_sin;
 
             apply_rope(
                 query,
                 config_.head_count,
                 config_.head_dim,
-                position,
-                rope_base);
+                rope_cos,
+                rope_sin);
             apply_rope(
                 key,
                 config_.head_count_kv,
                 config_.head_dim,
-                position,
-                rope_base);
+                rope_cos,
+                rope_sin);
 
             auto& cache = kv_cache_[layer];
             cache.keys.push_back(std::move(key));
