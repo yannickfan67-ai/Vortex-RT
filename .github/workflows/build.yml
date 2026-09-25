@@ -92,6 +92,14 @@ jobs:
           grep -q "TEXT_END" gemma-generation-report.txt
           grep -q "Validation: OK" gemma-generation-report.txt
 
+      - name: Run prompted Gemma 3 generation
+        run: |
+          ./build/vortexrt-gemma gemma-3-270m-Q8_0.gguf --prompt "Hello" --generate 2 | tee gemma-prompt-report.txt
+          grep -q "Prompt token ids:" gemma-prompt-report.txt
+          grep -q "Generated token ids:" gemma-prompt-report.txt
+          grep -q "TEXT_BEGIN" gemma-prompt-report.txt
+          grep -q "Validation: OK" gemma-prompt-report.txt
+
       - name: Upload model reports
         if: always()
         uses: actions/upload-artifact@v4
@@ -101,4 +109,5 @@ jobs:
             gguf-report.txt
             gemma-forward-report.txt
             gemma-generation-report.txt
+            gemma-prompt-report.txt
           if-no-files-found: ignore
