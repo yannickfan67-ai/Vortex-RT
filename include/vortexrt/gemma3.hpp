@@ -230,7 +230,7 @@ private:
     std::size_t tokenizer_max_piece_bytes_ = 0;
     std::uint32_t tokenizer_unk_id_ = 3;
     std::uint32_t tokenizer_bos_id_ = 2;
-    std::uint32_t tokenizer_eos_id_ = 1;
+    std::uint64_t tokenizer_eos_id_ = 1;
     bool tokenizer_add_space_prefix_ = false;
 
     std::unordered_map<std::string, std::vector<float>> f32_weights_;
