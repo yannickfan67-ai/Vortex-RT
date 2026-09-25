@@ -93,7 +93,9 @@ Gemma3Model::Gemma3Model(
     const auto subgroup_size =
         context_.capabilities().subgroup_size;
 
-    if (!q8_matvec_32_spirv.empty() &&
+    if (context_.capabilities().device_type !=
+            VK_PHYSICAL_DEVICE_TYPE_CPU &&
+        !q8_matvec_32_spirv.empty() &&
         subgroup_size != 0 &&
         subgroup_size <= 32u) {
         q8_pipeline_32_ =
