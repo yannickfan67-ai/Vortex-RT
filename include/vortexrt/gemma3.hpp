@@ -80,7 +80,12 @@ public:
     }
 
     [[nodiscard]] bool fused_ffn_enabled() const noexcept {
-        return fuse_projections_ && q8_pipeline_.ffn_available();
+        const auto* pipeline =
+            q8_pipeline_narrow_
+                ? q8_pipeline_narrow_.get()
+                : &q8_pipeline_;
+        return fuse_projections_ &&
+            pipeline->ffn_available();
     }
 
     [[nodiscard]] Gemma3SingleTokenResult run_single_token(
