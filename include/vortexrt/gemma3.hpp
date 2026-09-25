@@ -7,6 +7,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -112,8 +113,8 @@ public:
 
 private:
     struct LayerKvCache {
-        std::vector<std::vector<float>> keys;
-        std::vector<std::vector<float>> values;
+        std::deque<std::vector<float>> keys;
+        std::deque<std::vector<float>> values;
     };
 
     [[nodiscard]] Q8MatVecPipeline& q8_pipeline_for(
