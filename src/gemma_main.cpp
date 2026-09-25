@@ -96,6 +96,15 @@ Options parse_options(int argc, char** argv) {
                 parse_size(
                     next("--generate"),
                     "--generate");
+        } else if (arg == "--generate") {
+            options.generate =
+                parse_size(
+                    next("--generate"),
+                    "--generate");
+            if (options.generate > 128) {
+                throw std::runtime_error(
+                    "--generate is capped at 128 during bring-up");
+            }
         } else if (arg == "--device") {
             options.device = next("--device");
         } else if (arg == "--help" ||
@@ -198,6 +207,30 @@ int main(int argc, char** argv) {
 
         std::cout
             << "  Token: " << options.token_id << "\n";
+
+        if (options.generate != 0) {
+            std::cout
+                << "  Greedy generation from BOS: "
+                << options.generate
+                << " token(s)\n";
+
+            const auto generated =
+                model.generate_greedy_from_bos(
+                    options.generate);
+
+            std::cout << "  Generated token ids:";
+            for (const auto id : generated.token_ids) {
+                std::cout << " " << id;
+            }
+            std::cout << "\n";
+
+            std::cout
+                << "TEXT_BEGIN\n"
+                << generated.text
+                << "\nTEXT_END\n"
+                << "  Validation: OK\n";
+            return 0;
+        }
 
         const auto result =
             model.run_single_token(
