@@ -340,107 +340,120 @@ void Q8MatVecPipeline::run(
     check(
         vkResetFences(context_.device(), 1, &fence_),
         "vkResetFences failed");
-    check(
-        vkResetCommandBuffer(command_buffer_, 0),
-        "vkResetCommandBuffer failed");
 
-    VkCommandBufferBeginInfo begin{};
-    begin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-    begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-    check(
-        vkBeginCommandBuffer(command_buffer_, &begin),
-        "vkBeginCommandBuffer failed");
+    const bool need_recording =
+        !command_recording_valid_ ||
+        recorded_weight_byte_offset_ != weight_byte_offset ||
+        recorded_input_dim_ != input_dim ||
+        recorded_output_dim_ != output_dim;
 
-    vkCmdBindPipeline(
-        command_buffer_,
-        VK_PIPELINE_BIND_POINT_COMPUTE,
-        pipeline_);
-    vkCmdBindDescriptorSets(
-        command_buffer_,
-        VK_PIPELINE_BIND_POINT_COMPUTE,
-        pipeline_layout_,
-        0,
-        1,
-        &descriptor_set_,
-        0,
-        nullptr);
+    if (need_recording) {
+        check(
+            vkResetCommandBuffer(command_buffer_, 0),
+            "vkResetCommandBuffer failed");
 
-    constexpr std::uint32_t kMaxGroupsX = 65535u;
-    constexpr std::uint32_t kMaxGroupsY = 65535u;
-    const std::uint32_t groups_x =
-        std::min(output_dim, kMaxGroupsX);
-    const std::uint64_t groups_y_64 =
-        (static_cast<std::uint64_t>(output_dim) +
-         groups_x - 1u) /
-        groups_x;
+        VkCommandBufferBeginInfo begin{};
+        begin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+        check(
+            vkBeginCommandBuffer(command_buffer_, &begin),
+            "vkBeginCommandBuffer failed");
 
-    if (groups_y_64 > kMaxGroupsY) {
-        throw std::runtime_error(
-            "Q8MatVecPipeline output dimension exceeds 2D dispatch capacity");
+        vkCmdBindPipeline(
+            command_buffer_,
+            VK_PIPELINE_BIND_POINT_COMPUTE,
+            pipeline_);
+        vkCmdBindDescriptorSets(
+            command_buffer_,
+            VK_PIPELINE_BIND_POINT_COMPUTE,
+            pipeline_layout_,
+            0,
+            1,
+            &descriptor_set_,
+            0,
+            nullptr);
+
+        constexpr std::uint32_t kMaxGroupsX = 65535u;
+        constexpr std::uint32_t kMaxGroupsY = 65535u;
+        const std::uint32_t groups_x =
+            std::min(output_dim, kMaxGroupsX);
+        const std::uint64_t groups_y_64 =
+            (static_cast<std::uint64_t>(output_dim) +
+             groups_x - 1u) /
+            groups_x;
+
+        if (groups_y_64 > kMaxGroupsY) {
+            throw std::runtime_error(
+                "Q8MatVecPipeline output dimension exceeds 2D dispatch capacity");
+        }
+
+        const Push push{
+            weight_byte_offset,
+            input_dim,
+            output_dim,
+            groups_x,
+        };
+
+        vkCmdPushConstants(
+            command_buffer_,
+            pipeline_layout_,
+            VK_SHADER_STAGE_COMPUTE_BIT,
+            0,
+            sizeof(push),
+            &push);
+
+        VkMemoryBarrier before_dispatch{};
+        before_dispatch.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+        before_dispatch.srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT;
+        before_dispatch.dstAccessMask =
+            VK_ACCESS_SHADER_READ_BIT |
+            VK_ACCESS_SHADER_WRITE_BIT;
+
+        vkCmdPipelineBarrier(
+            command_buffer_,
+            VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+            0,
+            1,
+            &before_dispatch,
+            0,
+            nullptr,
+            0,
+            nullptr);
+
+        vkCmdDispatch(
+            command_buffer_,
+            groups_x,
+            static_cast<std::uint32_t>(groups_y_64),
+            1);
+
+        VkMemoryBarrier after_dispatch{};
+        after_dispatch.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+        after_dispatch.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        after_dispatch.dstAccessMask =
+            VK_ACCESS_MEMORY_READ_BIT |
+            VK_ACCESS_MEMORY_WRITE_BIT;
+
+        vkCmdPipelineBarrier(
+            command_buffer_,
+            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+            VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+            0,
+            1,
+            &after_dispatch,
+            0,
+            nullptr,
+            0,
+            nullptr);
+
+        check(
+            vkEndCommandBuffer(command_buffer_),
+            "vkEndCommandBuffer failed");
+
+        recorded_weight_byte_offset_ = weight_byte_offset;
+        recorded_input_dim_ = input_dim;
+        recorded_output_dim_ = output_dim;
+        command_recording_valid_ = true;
     }
-
-    const Push push{
-        weight_byte_offset,
-        input_dim,
-        output_dim,
-        groups_x,
-    };
-
-    vkCmdPushConstants(
-        command_buffer_,
-        pipeline_layout_,
-        VK_SHADER_STAGE_COMPUTE_BIT,
-        0,
-        sizeof(push),
-        &push);
-
-    VkMemoryBarrier before_dispatch{};
-    before_dispatch.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
-    before_dispatch.srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT;
-    before_dispatch.dstAccessMask =
-        VK_ACCESS_SHADER_READ_BIT |
-        VK_ACCESS_SHADER_WRITE_BIT;
-
-    vkCmdPipelineBarrier(
-        command_buffer_,
-        VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
-        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-        0,
-        1,
-        &before_dispatch,
-        0,
-        nullptr,
-        0,
-        nullptr);
-
-    vkCmdDispatch(
-        command_buffer_,
-        groups_x,
-        static_cast<std::uint32_t>(groups_y_64),
-        1);
-
-    VkMemoryBarrier after_dispatch{};
-    after_dispatch.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
-    after_dispatch.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-    after_dispatch.dstAccessMask =
-        VK_ACCESS_MEMORY_READ_BIT |
-        VK_ACCESS_MEMORY_WRITE_BIT;
-
-    vkCmdPipelineBarrier(
-        command_buffer_,
-        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-        VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
-        0,
-        1,
-        &after_dispatch,
-        0,
-        nullptr,
-        0,
-        nullptr);
-
-    check(
-        vkEndCommandBuffer(command_buffer_),
-        "vkEndCommandBuffer failed");
 
     VkSubmitInfo submit{};
     submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
