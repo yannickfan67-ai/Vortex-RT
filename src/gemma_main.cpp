@@ -205,6 +205,9 @@ int main(int argc, char** argv) {
             << config.sliding_window << "\n"
             << "  Vocab: "
             << config.vocab_size << "\n"
+            << "  Narrow Q8 kernel: "
+            << model.narrow_q8_lane_count()
+            << " lanes\n"
             << "  Projection fusion: "
             << (model.projection_fusion_enabled()
                     ? "enabled"
