@@ -2,6 +2,7 @@
 
 #include <vulkan/vulkan.h>
 
+#include <cstdlib>
 #include <exception>
 #include <iomanip>
 #include <iostream>
