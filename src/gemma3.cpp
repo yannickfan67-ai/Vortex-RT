@@ -102,13 +102,20 @@ Gemma3Model::Gemma3Model(
         q8_lane_override;
 
     if (selected_lanes == 0) {
-        selected_lanes =
-            context_.capabilities().device_type !=
-                    VK_PHYSICAL_DEVICE_TYPE_CPU &&
-                subgroup_size != 0 &&
-                subgroup_size <= 32u
-                ? 32u
-                : 64u;
+        switch (subgroup_size) {
+        case 8u:
+            selected_lanes = 8u;
+            break;
+        case 16u:
+            selected_lanes = 16u;
+            break;
+        case 32u:
+            selected_lanes = 32u;
+            break;
+        default:
+            selected_lanes = 64u;
+            break;
+        }
     }
 
     const auto make_narrow_pipeline =
@@ -123,7 +130,8 @@ Gemma3Model::Gemma3Model(
                 std::make_unique<Q8MatVecPipeline>(
                     context_,
                     spirv,
-                    u8_spirv);
+                    u8_spirv,
+                    gelu_mul_spirv);
             narrow_q8_lane_count_ =
                 lanes;
         };
@@ -1344,8 +1352,12 @@ Gemma3SingleTokenResult Gemma3Model::decode_token(
 
             std::vector<float> ffn_output;
 
+            auto& ffn_pipeline =
+                q8_pipeline_for(
+                    config_.embedding_length);
+
             if (fuse_projections_ &&
-                q8_pipeline_.ffn_available()) {
+                ffn_pipeline.ffn_available()) {
 
                 const auto gate_name =
                     layer_tensor(
@@ -1407,7 +1419,7 @@ Gemma3SingleTokenResult Gemma3Model::decode_token(
                 ffn_output.resize(
                     config_.embedding_length);
 
-                q8_pipeline_.run_staged_ffn(
+                ffn_pipeline.run_staged_ffn(
                     *weights_arena_,
                     *activation_input_,
                     *activation_output_,
