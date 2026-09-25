@@ -29,7 +29,7 @@ The runtime foundation is now usable rather than just a compile-only bring-up:
 - GGUF SentencePiece-style prompt tokenization + prompt prefill
 - tied LM head with GPU greedy argmax; full top-k diagnostic path remains available
 - real Gemma 3 270M Q8_0 text generation in CI on Lavapipe CPU Vulkan
-- adaptive Q8 lane selection follows Vulkan subgroup width (8/16/32, with 64-lane fallback); CPU Vulkan keeps projection fusion off by default while hardware GPUs enable it
+- adaptive Q8 lane selection follows Vulkan subgroup width (8/16/32, with 64-lane fallback); hardware GPUs enable projection fusion, and the measured subgroup-8 CPU Vulkan path enables it as well
 - load / forward / generation timing and tokens-per-second reporting, including selected Q8 lane width and fusion state
 
 ## Goals
@@ -117,7 +117,7 @@ For multi-GPU performance testing, run the same prompt once on each device and c
 .\build\Release\vortexrt-gemma.exe gemma-3-270m-Q8_0.gguf --device 1 --prompt "Hello" --generate 32
 ```
 
-On software CPU Vulkan such as Lavapipe, projection fusion remains disabled by default because end-to-end CI measurements show it is slower there. Q8 workgroup width is still adapted to the reported subgroup size; on the current Lavapipe runner, the 8-lane path is substantially faster than the old 64-lane default. The fused FFN is also covered by a dedicated correctness test and can be forced from the CLI for A/B measurements.
+On the current Lavapipe CPU Vulkan runner, the subgroup-8 Q8 path is substantially faster than the old 64-lane default. Once fused FFN/QKV execution was moved onto the selected 8-lane pipeline and command buffers were cached, repeated end-to-end A/B runs also showed a small consistent gain from projection fusion, so subgroup-8 CPU Vulkan now enables it automatically. Other CPU Vulkan subgroup widths remain conservative until measured. The fused FFN is separately covered by a CPU-reference correctness test and can still be forced on or off from the CLI for A/B measurements.
 
 ## Benchmark controls
 
