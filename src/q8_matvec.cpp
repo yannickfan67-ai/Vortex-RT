@@ -971,7 +971,7 @@ void Q8MatVecPipeline::run_staged_pair(
             required_input_bytes));
 
     for (std::size_t set_index = 0;
-         set_index < triplet_sets_.size();
+         set_index < output_dims.size();
          ++set_index) {
 
         const VkDeviceSize output_bytes =
