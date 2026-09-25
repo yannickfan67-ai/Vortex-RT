@@ -8,8 +8,6 @@ on:
 jobs:
   linux-lavapipe:
     runs-on: ubuntu-24.04
-    env:
-      VK_ICD_FILENAMES: /usr/share/vulkan/icd.d/lvp_icd.x86_64.json
     steps:
       - uses: actions/checkout@v4
 
@@ -17,6 +15,16 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libvulkan-dev mesa-vulkan-drivers vulkan-tools glslc curl
+
+      - name: Select Lavapipe ICD
+        run: |
+          echo "Installed ICDs:"
+          find /usr/share/vulkan/icd.d -maxdepth 1 -type f -print || true
+          LVP="$(find /usr/share/vulkan/icd.d -maxdepth 1 -type f \( -iname '*lvp*.json' -o -iname '*lavapipe*.json' \) | head -n 1)"
+          test -n "$LVP"
+          echo "Using Lavapipe ICD: $LVP"
+          echo "VK_ICD_FILENAMES=$LVP" >> "$GITHUB_ENV"
+          echo "VK_DRIVER_FILES=$LVP" >> "$GITHUB_ENV"
 
       - name: Configure
         run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
