@@ -409,6 +409,8 @@ void Q8MatVecPipeline::cleanup() noexcept {
         command_pool_ = VK_NULL_HANDLE;
         command_cache_.clear();
         staged_command_cache_.clear();
+        pair_command_cache_.clear();
+        triplet_command_cache_.clear();
         ffn_command_cache_.clear();
     }
     if (ffn_descriptor_pool_ != VK_NULL_HANDLE) {
@@ -505,6 +507,50 @@ std::size_t Q8MatVecPipeline::StagedDispatchKeyHash::operator()(
     return hash;
 }
 
+std::size_t Q8MatVecPipeline::PairDispatchKeyHash::operator()(
+    const PairDispatchKey& key) const noexcept {
+
+    std::size_t hash = 0;
+
+    const auto combine = [&](std::uint32_t value) {
+        hash ^=
+            static_cast<std::size_t>(value) +
+            static_cast<std::size_t>(0x9e3779b9u) +
+            (hash << 6u) +
+            (hash >> 2u);
+    };
+
+    combine(key.weight_byte_offsets[0]);
+    combine(key.weight_byte_offsets[1]);
+    combine(key.input_dim);
+    combine(key.output_dims[0]);
+    combine(key.output_dims[1]);
+    return hash;
+}
+
+std::size_t Q8MatVecPipeline::TripletDispatchKeyHash::operator()(
+    const TripletDispatchKey& key) const noexcept {
+
+    std::size_t hash = 0;
+
+    const auto combine = [&](std::uint32_t value) {
+        hash ^=
+            static_cast<std::size_t>(value) +
+            static_cast<std::size_t>(0x9e3779b9u) +
+            (hash << 6u) +
+            (hash >> 2u);
+    };
+
+    combine(key.weight_byte_offsets[0]);
+    combine(key.weight_byte_offsets[1]);
+    combine(key.weight_byte_offsets[2]);
+    combine(key.input_dim);
+    combine(key.output_dims[0]);
+    combine(key.output_dims[1]);
+    combine(key.output_dims[2]);
+    return hash;
+}
+
 std::size_t Q8MatVecPipeline::FfnDispatchKeyHash::operator()(
     const FfnDispatchKey& key) const noexcept {
 
@@ -546,6 +592,46 @@ void Q8MatVecPipeline::clear_staged_command_cache() noexcept {
     }
 
     staged_command_cache_.clear();
+}
+
+void Q8MatVecPipeline::clear_pair_command_cache() noexcept {
+    if (command_pool_ == VK_NULL_HANDLE) {
+        pair_command_cache_.clear();
+        return;
+    }
+
+    for (auto& entry : pair_command_cache_) {
+        auto command = entry.second;
+        if (command != VK_NULL_HANDLE) {
+            vkFreeCommandBuffers(
+                context_.device(),
+                command_pool_,
+                1,
+                &command);
+        }
+    }
+
+    pair_command_cache_.clear();
+}
+
+void Q8MatVecPipeline::clear_triplet_command_cache() noexcept {
+    if (command_pool_ == VK_NULL_HANDLE) {
+        triplet_command_cache_.clear();
+        return;
+    }
+
+    for (auto& entry : triplet_command_cache_) {
+        auto command = entry.second;
+        if (command != VK_NULL_HANDLE) {
+            vkFreeCommandBuffers(
+                context_.device(),
+                command_pool_,
+                1,
+                &command);
+        }
+    }
+
+    triplet_command_cache_.clear();
 }
 
 VkCommandBuffer Q8MatVecPipeline::get_or_record_command(
