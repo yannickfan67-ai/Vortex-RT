@@ -65,6 +65,10 @@ public:
         return fuse_projections_;
     }
 
+    [[nodiscard]] std::uint32_t narrow_q8_lane_count() const noexcept {
+        return q8_pipeline_32_ ? 32u : 64u;
+    }
+
     [[nodiscard]] Gemma3SingleTokenResult run_single_token(
         std::uint32_t token_id,
         std::size_t top_k = 8);
