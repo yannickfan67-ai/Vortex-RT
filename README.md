@@ -20,14 +20,17 @@ The runtime foundation is now usable rather than just a compile-only bring-up:
 - vector-add correctness/performance benchmark
 - GGUF v2/v3 metadata + tensor-directory parser
 - Vulkan-native Q8_0 matvec with native 8-bit-storage fast path and CPU-reference validation
-- fused Q/K/V and FFN gate/up projection submits with packed-output reference tests
+- subgroup-aware Q8 kernels (64/32/16/8-lane variants) with device-adaptive selection
+- fused Q/K/V projection submits with packed-output reference tests
+- one-submit GPU FFN path: Q8 gate/up -> GELU-tanh multiply -> Q8 down, with CPU-reference validation
 - explicit transfer/compute memory dependencies for cross-driver correctness
 - device-local GGUF weight arena and reusable activation/staging buffers
 - Gemma 3 270M decoder with RMSNorm, Q/K norm, RoPE, local/global attention and KV cache
 - GGUF SentencePiece-style prompt tokenization + prompt prefill
 - tied LM head with GPU greedy argmax; full top-k diagnostic path remains available
 - real Gemma 3 270M Q8_0 text generation in CI on Lavapipe CPU Vulkan
-- load / forward / generation timing and tokens-per-second reporting
+- CPU Vulkan automatically keeps conservative 64-lane/non-fused projection paths when fusion is slower; hardware GPUs enable projection/FFN fusion
+- load / forward / generation timing and tokens-per-second reporting, including selected Q8 lane width and fusion state
 
 ## Goals
 
@@ -67,11 +70,15 @@ AMD / NVIDIA / Intel
 ### Windows
 
 ```powershell
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
 cmake --build build --config Release
 .\build\Release\vortexrt-info.exe
 .\build\Release\vortexrt-bench.exe
+.\build\Release\vortexrt-q8-test.exe
+.\build\Release\vortexrt-gelu-test.exe
+.\build\Release\vortexrt-ffn-test.exe
 .\build\Release\vortexrt-gguf-info.exe model.gguf
+.\build\Release\vortexrt-gemma.exe model.gguf --prompt "Hello" --generate 16
 ```
 
 ### Linux
@@ -102,6 +109,15 @@ VORTEXRT_DEVICE="RX 9070" ./build/vortexrt-info
 ```
 
 The numeric selector is the Vulkan physical-device index reported by `vortexrt-info`.
+
+For multi-GPU performance testing, run the same prompt once on each device and compare the CLI-reported lane/fusion state and throughput:
+
+```powershell
+.\build\Release\vortexrt-gemma.exe gemma-3-270m-Q8_0.gguf --device 0 --prompt "Hello" --generate 32
+.\build\Release\vortexrt-gemma.exe gemma-3-270m-Q8_0.gguf --device 1 --prompt "Hello" --generate 32
+```
+
+On software CPU Vulkan such as Lavapipe, projection fusion and the real-model fused FFN are intentionally disabled because CI measurements showed those multi-dispatch paths can be slower there. The fused GPU FFN is still executed by a dedicated synthetic correctness test in CI, so the hardware-GPU path is validated even though the real model runs on a CPU Vulkan driver.
 
 ## Benchmark controls
 
@@ -161,9 +177,9 @@ The CLI reports model-load time, forward/generation time and generation throughp
 4. Q8_0 Vulkan matvec + native 8-bit-storage path — **done**
 5. Gemma 3 270M Transformer execution + KV cache — **done**
 6. Prompt tokenizer / prefill / greedy sampling — **done**
-7. Reduce dispatch and transfer overhead with projection fusion — **in progress**
-8. Subgroup-aware Q8/GEMM tuning and fused normalization/activation — **in progress**
-9. GPU-resident KV cache + fused attention
+7. Reduce dispatch and transfer overhead with projection fusion — **done for QKV/FFN bring-up**
+8. Subgroup-aware Q8/GEMM tuning and fused normalization/activation — **in progress** (Q8 lane selection + fused GELU FFN landed)
+9. GPU-resident KV cache + fused attention — **next major residency milestone**
 10. FP16 GEMM, Q4/K-quants and broader model coverage
 11. continuous batching and OpenAI-compatible API
 
