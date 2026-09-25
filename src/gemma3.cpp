@@ -947,24 +947,27 @@ Gemma3SingleTokenResult Gemma3Model::decode_token(
                         layer,
                         "attn_norm.weight"));
 
+            auto qkv =
+                run_q8_triplet(
+                    std::array<std::string, 3>{
+                        layer_tensor(
+                            layer,
+                            "attn_q.weight"),
+                        layer_tensor(
+                            layer,
+                            "attn_k.weight"),
+                        layer_tensor(
+                            layer,
+                            "attn_v.weight"),
+                    },
+                    attn_input);
+
             auto query =
-                run_q8_matvec(
-                    layer_tensor(
-                        layer,
-                        "attn_q.weight"),
-                    attn_input);
+                std::move(qkv[0]);
             auto key =
-                run_q8_matvec(
-                    layer_tensor(
-                        layer,
-                        "attn_k.weight"),
-                    attn_input);
+                std::move(qkv[1]);
             const auto value =
-                run_q8_matvec(
-                    layer_tensor(
-                        layer,
-                        "attn_v.weight"),
-                    attn_input);
+                std::move(qkv[2]);
 
             query =
                 rms_norm_heads(
