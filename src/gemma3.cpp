@@ -362,14 +362,16 @@ std::size_t Gemma3Model::run_q8_matvec_to_output(
             "Gemma 3 weight arena is not initialized");
     }
 
-    activation_input_->upload(
-        input.data(),
-        input.size() * sizeof(float));
-
-    q8_pipeline_.run(
+    q8_pipeline_.run_staged(
         *weights_arena_,
         *activation_input_,
         *activation_output_,
+        *staging_input_,
+        *staging_output_,
+        input.data(),
+        input.size() * sizeof(float),
+        nullptr,
+        0,
         static_cast<std::uint32_t>(
             tensor->offset),
         static_cast<std::uint32_t>(
