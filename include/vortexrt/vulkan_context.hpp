@@ -36,6 +36,7 @@ struct BufferMemoryAllocation {
     VkDeviceSize offset = 0;
     VkDeviceSize size = 0;
     std::uint64_t block_id = 0;
+    VkMemoryPropertyFlags properties = 0;
     bool pooled = false;
 };
 
