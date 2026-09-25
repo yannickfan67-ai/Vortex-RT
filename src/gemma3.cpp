@@ -82,6 +82,10 @@ Gemma3Model::Gemma3Model(
           q8_matvec_spirv,
           q8_matvec_u8_spirv) {
 
+    fuse_projections_ =
+        context_.capabilities().device_type !=
+        VK_PHYSICAL_DEVICE_TYPE_CPU;
+
     const auto architecture =
         gguf_.metadata_string("general.architecture");
     if (architecture != std::optional<std::string>{"gemma3"}) {
@@ -1036,27 +1040,49 @@ Gemma3SingleTokenResult Gemma3Model::decode_token(
                         layer,
                         "attn_norm.weight"));
 
-            auto qkv =
-                run_q8_triplet(
-                    std::array<std::string, 3>{
+            std::vector<float> query;
+            std::vector<float> key;
+            std::vector<float> value;
+
+            if (fuse_projections_) {
+                auto qkv =
+                    run_q8_triplet(
+                        std::array<std::string, 3>{
+                            layer_tensor(
+                                layer,
+                                "attn_q.weight"),
+                            layer_tensor(
+                                layer,
+                                "attn_k.weight"),
+                            layer_tensor(
+                                layer,
+                                "attn_v.weight"),
+                        },
+                        attn_input);
+
+                query = std::move(qkv[0]);
+                key = std::move(qkv[1]);
+                value = std::move(qkv[2]);
+            } else {
+                query =
+                    run_q8_matvec(
                         layer_tensor(
                             layer,
                             "attn_q.weight"),
+                        attn_input);
+                key =
+                    run_q8_matvec(
                         layer_tensor(
                             layer,
                             "attn_k.weight"),
+                        attn_input);
+                value =
+                    run_q8_matvec(
                         layer_tensor(
                             layer,
                             "attn_v.weight"),
-                    },
-                    attn_input);
-
-            auto query =
-                std::move(qkv[0]);
-            auto key =
-                std::move(qkv[1]);
-            const auto value =
-                std::move(qkv[2]);
+                        attn_input);
+            }
 
             query =
                 rms_norm_heads(
@@ -1231,22 +1257,38 @@ Gemma3SingleTokenResult Gemma3Model::decode_token(
                         layer,
                         "ffn_norm.weight"));
 
-            auto gate_up =
-                run_q8_pair(
-                    std::array<std::string, 2>{
+            std::vector<float> gate;
+            std::vector<float> up;
+
+            if (fuse_projections_) {
+                auto gate_up =
+                    run_q8_pair(
+                        std::array<std::string, 2>{
+                            layer_tensor(
+                                layer,
+                                "ffn_gate.weight"),
+                            layer_tensor(
+                                layer,
+                                "ffn_up.weight"),
+                        },
+                        ffn_input);
+
+                gate = std::move(gate_up[0]);
+                up = std::move(gate_up[1]);
+            } else {
+                gate =
+                    run_q8_matvec(
                         layer_tensor(
                             layer,
                             "ffn_gate.weight"),
+                        ffn_input);
+                up =
+                    run_q8_matvec(
                         layer_tensor(
                             layer,
                             "ffn_up.weight"),
-                    },
-                    ffn_input);
-
-            auto gate =
-                std::move(gate_up[0]);
-            auto up =
-                std::move(gate_up[1]);
+                        ffn_input);
+            }
 
             if (gate.size() != up.size() ||
                 gate.size() !=
