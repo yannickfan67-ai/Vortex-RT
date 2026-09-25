@@ -49,7 +49,8 @@ public:
     Gemma3Model(
         const std::string& gguf_path,
         VulkanContext& context,
-        const std::string& q8_matvec_spirv);
+        const std::string& q8_matvec_spirv,
+        const std::string& q8_matvec_u8_spirv = {});
 
     [[nodiscard]] const Gemma3Config& config() const noexcept {
         return config_;
