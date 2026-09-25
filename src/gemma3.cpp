@@ -73,7 +73,8 @@ Gemma3Model::Gemma3Model(
     const std::string& gguf_path,
     VulkanContext& context,
     const std::string& q8_matvec_spirv,
-    const std::string& q8_matvec_u8_spirv)
+    const std::string& q8_matvec_u8_spirv,
+    const std::string& argmax_spirv)
     : gguf_(gguf_path),
       context_(context),
       q8_pipeline_(
@@ -320,6 +321,64 @@ Gemma3Model::Gemma3Model(
         VK_BUFFER_USAGE_TRANSFER_DST_BIT,
         VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
             VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+
+    if (!argmax_spirv.empty()) {
+        argmax_pipeline_ =
+            std::make_unique<ArgmaxPipeline>(
+                context_,
+                argmax_spirv);
+        argmax_output_ =
+            std::make_unique<Buffer>(
+                context_,
+                sizeof(ArgmaxResult),
+                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                    VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    }
+}
+
+std::size_t Gemma3Model::run_q8_matvec_to_output(
+    const std::string& tensor_name,
+    const std::vector<float>& input) {
+
+    const auto* tensor =
+        require_tensor(gguf_, tensor_name);
+
+    if (tensor->type != 8 ||
+        tensor->dimensions.size() != 2 ||
+        tensor->dimensions[0] != input.size() ||
+        tensor->dimensions[0] >
+            std::numeric_limits<std::uint32_t>::max() ||
+        tensor->dimensions[1] >
+            std::numeric_limits<std::uint32_t>::max() ||
+        tensor->offset >
+            std::numeric_limits<std::uint32_t>::max()) {
+        throw std::runtime_error(
+            "Unsupported Q8_0 matrix layout: " + tensor_name);
+    }
+
+    if (!weights_arena_) {
+        throw std::runtime_error(
+            "Gemma 3 weight arena is not initialized");
+    }
+
+    activation_input_->upload(
+        input.data(),
+        input.size() * sizeof(float));
+
+    q8_pipeline_.run(
+        *weights_arena_,
+        *activation_input_,
+        *activation_output_,
+        static_cast<std::uint32_t>(
+            tensor->offset),
+        static_cast<std::uint32_t>(
+            tensor->dimensions[0]),
+        static_cast<std::uint32_t>(
+            tensor->dimensions[1]));
+
+    return static_cast<std::size_t>(
+        tensor->dimensions[1]);
 }
 
 std::vector<float> Gemma3Model::run_q8_matvec(
@@ -515,6 +574,47 @@ std::vector<Gemma3TopToken> Gemma3Model::top_logits(
         return {};
     }
 
+    if (top_k == 1 &&
+        argmax_pipeline_ &&
+        argmax_output_) {
+
+        const auto output_elements =
+            run_q8_matvec_to_output(
+                "token_embd.weight",
+                hidden);
+
+        if (output_elements !=
+            config_.vocab_size) {
+            throw std::runtime_error(
+                "Gemma 3 tied output logits have wrong width");
+        }
+
+        argmax_pipeline_->run(
+            *activation_output_,
+            *argmax_output_,
+            config_.vocab_size);
+
+        ArgmaxResult reduced{};
+        argmax_output_->download(
+            &reduced,
+            sizeof(reduced));
+
+        if (reduced.index >=
+                config_.vocab_size ||
+            !std::isfinite(reduced.value)) {
+            throw std::runtime_error(
+                "GPU argmax produced invalid result");
+        }
+
+        return {
+            Gemma3TopToken{
+                reduced.index,
+                reduced.value,
+                token_piece(reduced.index),
+            }
+        };
+    }
+
     auto logits =
         run_q8_matvec(
             "token_embd.weight",
@@ -545,12 +645,15 @@ std::vector<Gemma3TopToken> Gemma3Model::top_logits(
     std::vector<Gemma3TopToken> result;
     result.reserve(top_k);
 
-    for (std::size_t i = 0; i < top_k; ++i) {
+    for (std::size_t i = 0;
+         i < top_k;
+         ++i) {
         const auto id = ids[i];
         if (!std::isfinite(logits[id])) {
             throw std::runtime_error(
                 "Non-finite Gemma 3 logit");
         }
+
         result.push_back(
             Gemma3TopToken{
                 id,
