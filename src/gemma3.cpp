@@ -72,10 +72,14 @@ std::string layer_tensor(
 Gemma3Model::Gemma3Model(
     const std::string& gguf_path,
     VulkanContext& context,
-    const std::string& q8_matvec_spirv)
+    const std::string& q8_matvec_spirv,
+    const std::string& q8_matvec_u8_spirv)
     : gguf_(gguf_path),
       context_(context),
-      q8_pipeline_(context, q8_matvec_spirv) {
+      q8_pipeline_(
+          context,
+          q8_matvec_spirv,
+          q8_matvec_u8_spirv) {
 
     const auto architecture =
         gguf_.metadata_string("general.architecture");
