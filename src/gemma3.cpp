@@ -1217,15 +1217,13 @@ std::vector<Gemma3TopToken> Gemma3Model::top_logits(
 std::string Gemma3Model::token_piece(
     std::uint32_t token_id) const {
 
-    const auto* tokens =
-        gguf_.find_metadata("tokenizer.ggml.tokens");
-    if (tokens == nullptr ||
-        !tokens->is_array() ||
-        token_id >= tokens->array.size()) {
+    if (tokenizer_tokens_ == nullptr ||
+        token_id >=
+            tokenizer_tokens_->array.size()) {
         return {};
     }
 
-    return tokens->array[token_id]
+    return tokenizer_tokens_->array[token_id]
         .as_string()
         .value_or(std::string{});
 }
@@ -1935,11 +1933,6 @@ std::vector<std::uint32_t> Gemma3Model::tokenize(
         std::numeric_limits<std::uint32_t>::max());
 
     best[0] = 0.0f;
-
-    const auto unk =
-        gguf_.metadata_u64(
-            "tokenizer.ggml.unknown_token_id")
-            .value_or(3);
 
     for (std::size_t position = 0;
          position < normalized.size();
