@@ -542,10 +542,11 @@ void Q8MatVecPipeline::run_staged(
     std::uint32_t input_dim,
     std::uint32_t output_dim) {
 
-    if (host_input == nullptr || host_output == nullptr) {
+    if (host_input == nullptr) {
         throw std::runtime_error(
-            "Q8MatVecPipeline::run_staged received null host buffer");
+            "Q8MatVecPipeline::run_staged received null host input");
     }
+    const bool readback = host_output != nullptr;
     if (input_dim == 0 || output_dim == 0) {
         throw std::runtime_error(
             "Q8MatVecPipeline dimensions must be non-zero");
@@ -595,12 +596,14 @@ void Q8MatVecPipeline::run_staged(
             "Q8MatVecPipeline device buffer is too small");
     }
     if (required_input_bytes > staging_input.size() ||
-        required_output_bytes > staging_output.size()) {
+        (readback &&
+         required_output_bytes > staging_output.size())) {
         throw std::runtime_error(
             "Q8MatVecPipeline staging buffer is too small");
     }
     if (host_input_bytes < required_input_bytes ||
-        host_output_bytes < required_output_bytes) {
+        (readback &&
+         host_output_bytes < required_output_bytes)) {
         throw std::runtime_error(
             "Q8MatVecPipeline host buffer is too small");
     }
@@ -761,11 +764,15 @@ void Q8MatVecPipeline::run_staged(
     output_barrier.srcAccessMask =
         VK_ACCESS_SHADER_WRITE_BIT;
     output_barrier.dstAccessMask =
-        VK_ACCESS_TRANSFER_READ_BIT;
+        readback
+            ? VK_ACCESS_TRANSFER_READ_BIT
+            : VK_ACCESS_SHADER_READ_BIT;
     vkCmdPipelineBarrier(
         staged_command_,
         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-        VK_PIPELINE_STAGE_TRANSFER_BIT,
+        readback
+            ? VK_PIPELINE_STAGE_TRANSFER_BIT
+            : VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
         0,
         1,
         &output_barrier,
@@ -774,34 +781,36 @@ void Q8MatVecPipeline::run_staged(
         0,
         nullptr);
 
-    VkBufferCopy output_copy{};
-    output_copy.size =
-        static_cast<VkDeviceSize>(required_output_bytes);
-    vkCmdCopyBuffer(
-        staged_command_,
-        output.handle(),
-        staging_output.handle(),
-        1,
-        &output_copy);
+    if (readback) {
+        VkBufferCopy output_copy{};
+        output_copy.size =
+            static_cast<VkDeviceSize>(required_output_bytes);
+        vkCmdCopyBuffer(
+            staged_command_,
+            output.handle(),
+            staging_output.handle(),
+            1,
+            &output_copy);
 
-    VkMemoryBarrier host_barrier{};
-    host_barrier.sType =
-        VK_STRUCTURE_TYPE_MEMORY_BARRIER;
-    host_barrier.srcAccessMask =
-        VK_ACCESS_TRANSFER_WRITE_BIT;
-    host_barrier.dstAccessMask =
-        VK_ACCESS_HOST_READ_BIT;
-    vkCmdPipelineBarrier(
-        staged_command_,
-        VK_PIPELINE_STAGE_TRANSFER_BIT,
-        VK_PIPELINE_STAGE_HOST_BIT,
-        0,
-        1,
-        &host_barrier,
-        0,
-        nullptr,
-        0,
-        nullptr);
+        VkMemoryBarrier host_barrier{};
+        host_barrier.sType =
+            VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+        host_barrier.srcAccessMask =
+            VK_ACCESS_TRANSFER_WRITE_BIT;
+        host_barrier.dstAccessMask =
+            VK_ACCESS_HOST_READ_BIT;
+        vkCmdPipelineBarrier(
+            staged_command_,
+            VK_PIPELINE_STAGE_TRANSFER_BIT,
+            VK_PIPELINE_STAGE_HOST_BIT,
+            0,
+            1,
+            &host_barrier,
+            0,
+            nullptr,
+            0,
+            nullptr);
+    }
 
     check(
         vkEndCommandBuffer(staged_command_),
@@ -832,9 +841,11 @@ void Q8MatVecPipeline::run_staged(
             UINT64_MAX),
         "vkWaitForFences failed for staged Q8 path");
 
-    staging_output.download(
-        host_output,
-        static_cast<std::size_t>(required_output_bytes));
+    if (readback) {
+        staging_output.download(
+            host_output,
+            static_cast<std::size_t>(required_output_bytes));
+    }
 }
 
 } // namespace vortexrt
