@@ -2065,6 +2065,22 @@ Gemma3GenerationResult Gemma3Model::generate_greedy(
     const std::string& prompt,
     std::size_t max_new_tokens) {
 
+    if (max_new_tokens == 0) {
+        reset_cache();
+        return {};
+    }
+
+    return generate_greedy_tokens(
+        tokenize(
+            prompt,
+            true),
+        max_new_tokens);
+}
+
+Gemma3GenerationResult Gemma3Model::generate_greedy_tokens(
+    const std::vector<std::uint32_t>& prompt_tokens,
+    std::size_t max_new_tokens) {
+
     reset_cache();
 
     Gemma3GenerationResult generated{};
@@ -2072,8 +2088,6 @@ Gemma3GenerationResult Gemma3Model::generate_greedy(
         return generated;
     }
 
-    const auto prompt_tokens =
-        tokenize(prompt, true);
     if (prompt_tokens.empty()) {
         throw std::runtime_error(
             "Gemma 3 prompt produced no input tokens");
@@ -2086,7 +2100,8 @@ Gemma3GenerationResult Gemma3Model::generate_greedy(
          i < prompt_tokens.size();
          ++i) {
         const bool last =
-            i + 1 == prompt_tokens.size();
+            i + 1 ==
+            prompt_tokens.size();
 
         decoded =
             decode_token(
@@ -2126,7 +2141,8 @@ Gemma3GenerationResult Gemma3Model::generate_greedy(
         }
 
         generated.text +=
-            decode_piece(current_token);
+            decode_piece(
+                current_token);
     }
 
     return generated;
@@ -2135,8 +2151,15 @@ Gemma3GenerationResult Gemma3Model::generate_greedy(
 Gemma3GenerationResult Gemma3Model::generate_greedy_from_bos(
     std::size_t max_new_tokens) {
 
-    return generate_greedy(
-        std::string{},
+    if (max_new_tokens == 0) {
+        reset_cache();
+        return {};
+    }
+
+    return generate_greedy_tokens(
+        std::vector<std::uint32_t>{
+            tokenizer_bos_id_,
+        },
         max_new_tokens);
 }
 
