@@ -422,6 +422,11 @@ Gemma3Model::Gemma3Model(
                 .value_or(false);
     }
 
+    const auto unk =
+        gguf_.metadata_u64(
+            "tokenizer.ggml.unknown_token_id")
+            .value_or(3);
+
     tokenizer_unk_id_ =
         static_cast<std::uint32_t>(
             std::min<std::uint64_t>(
