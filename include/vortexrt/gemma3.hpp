@@ -113,6 +113,10 @@ private:
         const std::string& tensor_name,
         const std::vector<float>& input);
 
+    [[nodiscard]] std::vector<float> run_q8_ffn(
+        std::uint32_t layer,
+        const std::vector<float>& input);
+
     [[nodiscard]] std::array<std::vector<float>, 2> run_q8_pair(
         const std::array<std::string, 2>& tensor_names,
         const std::vector<float>& input);
