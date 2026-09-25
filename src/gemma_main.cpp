@@ -172,7 +172,8 @@ int main(int argc, char** argv) {
             vortexrt::build_config::q8_matvec_u8_spv,
             vortexrt::build_config::argmax_spv,
             vortexrt::build_config::q8_matvec_32_spv,
-            vortexrt::build_config::q8_matvec_u8_32_spv);
+            vortexrt::build_config::q8_matvec_u8_32_spv,
+            vortexrt::build_config::gelu_mul_spv);
 
         const auto model_ready =
             std::chrono::steady_clock::now();
@@ -210,6 +211,11 @@ int main(int argc, char** argv) {
             << " lanes\n"
             << "  Projection fusion: "
             << (model.projection_fusion_enabled()
+                    ? "enabled"
+                    : "disabled")
+            << "\n"
+            << "  Fused FFN: "
+            << (model.fused_ffn_enabled()
                     ? "enabled"
                     : "disabled")
             << "\n"
