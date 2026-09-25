@@ -66,6 +66,10 @@ public:
         return fuse_projections_;
     }
 
+    void set_projection_fusion_enabled(bool enabled) noexcept {
+        fuse_projections_ = enabled;
+    }
+
     [[nodiscard]] std::uint32_t narrow_q8_lane_count() const noexcept {
         return q8_pipeline_32_ ? 32u : 64u;
     }
