@@ -1323,8 +1323,8 @@ Gemma3SingleTokenResult Gemma3Model::decode_token(
                 config_.sliding_window != 0 &&
                 cache.keys.size() >
                     config_.sliding_window) {
-                cache.keys.erase(cache.keys.begin());
-                cache.values.erase(cache.values.begin());
+                cache.keys.pop_front();
+                cache.values.pop_front();
             }
 
             if (cache.keys.size() !=
