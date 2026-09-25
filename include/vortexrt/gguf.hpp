@@ -5,6 +5,7 @@
 #include <filesystem>
 #include <optional>
 #include <string>
+#include <unordered_map>
 #include <variant>
 #include <vector>
 
@@ -110,6 +111,8 @@ private:
 
     std::vector<GgufMetadata> metadata_;
     std::vector<GgufTensorInfo> tensors_;
+    std::unordered_map<std::string, std::size_t> metadata_index_;
+    std::unordered_map<std::string, std::size_t> tensor_index_;
 };
 
 [[nodiscard]] const char* gguf_value_type_name(GgufValueType type) noexcept;
