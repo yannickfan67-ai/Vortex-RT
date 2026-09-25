@@ -218,12 +218,16 @@ private:
     VkBuffer pair_bound_weights_ = VK_NULL_HANDLE;
     VkBuffer pair_bound_input_ = VK_NULL_HANDLE;
     VkBuffer pair_bound_output_ = VK_NULL_HANDLE;
+    VkBuffer pair_bound_staging_input_ = VK_NULL_HANDLE;
+    VkBuffer pair_bound_staging_output_ = VK_NULL_HANDLE;
     std::array<std::uint32_t, 2> pair_bound_output_dims_{};
     bool pair_descriptors_valid_ = false;
 
     VkBuffer triplet_bound_weights_ = VK_NULL_HANDLE;
     VkBuffer triplet_bound_input_ = VK_NULL_HANDLE;
     VkBuffer triplet_bound_output_ = VK_NULL_HANDLE;
+    VkBuffer triplet_bound_staging_input_ = VK_NULL_HANDLE;
+    VkBuffer triplet_bound_staging_output_ = VK_NULL_HANDLE;
     std::array<std::uint32_t, 3> triplet_bound_output_dims_{};
     bool triplet_descriptors_valid_ = false;
 
