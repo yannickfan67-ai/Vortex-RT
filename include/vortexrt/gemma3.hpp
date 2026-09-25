@@ -109,6 +109,10 @@ public:
         const std::string& prompt,
         std::size_t max_new_tokens);
 
+    [[nodiscard]] Gemma3GenerationResult generate_greedy_tokens(
+        const std::vector<std::uint32_t>& prompt_tokens,
+        std::size_t max_new_tokens);
+
     [[nodiscard]] Gemma3GenerationResult generate_greedy_from_bos(
         std::size_t max_new_tokens);
 
