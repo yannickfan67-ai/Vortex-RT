@@ -421,11 +421,11 @@ Gemma3Model::Gemma3Model(
 Q8MatVecPipeline& Gemma3Model::q8_pipeline_for(
     std::size_t input_dim) noexcept {
 
-    // 640-wide and 1024-wide Gemma projections contain only
-    // 20 and 32 Q8 blocks respectively.  On subgroup-32-or-
-    // smaller devices the 32-lane variant avoids wasting half
-    // or more of a 64-lane workgroup.  The 2048-wide FFN down
-    // projection keeps the 64-lane path.
+    // Narrow Gemma projections contain only 20-32 Q8 blocks.
+    // Match their workgroup width to the device subgroup when a
+    // tuned 8/16/32-lane variant is available. Wider projections
+    // keep the base pipeline unless they are part of the fused FFN
+    // command, which intentionally uses one consistent pipeline.
     if (q8_pipeline_narrow_ &&
         input_dim <= 1024u) {
         return *q8_pipeline_narrow_;
