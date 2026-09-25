@@ -66,6 +66,14 @@ public:
         std::uint32_t position,
         std::size_t top_k = 1);
 
+    [[nodiscard]] std::vector<std::uint32_t> tokenize(
+        const std::string& text,
+        bool add_bos = true) const;
+
+    [[nodiscard]] Gemma3GenerationResult generate_greedy(
+        const std::string& prompt,
+        std::size_t max_new_tokens);
+
     [[nodiscard]] Gemma3GenerationResult generate_greedy_from_bos(
         std::size_t max_new_tokens);
 
