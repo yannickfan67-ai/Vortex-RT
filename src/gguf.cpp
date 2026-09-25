@@ -348,6 +348,9 @@ GgufFile::GgufFile(const std::filesystem::path& path)
 
         kv.value = read_value(reader, static_cast<GgufValueType>(raw_type), 0);
         metadata_.push_back(std::move(kv));
+        metadata_index_.try_emplace(
+            metadata_.back().key,
+            metadata_.size() - 1u);
     }
 
     if (const auto* alignment = find_metadata("general.alignment")) {
@@ -381,6 +384,9 @@ GgufFile::GgufFile(const std::filesystem::path& path)
         tensor.type = reader.pod<std::uint32_t>();
         tensor.offset = reader.pod<std::uint64_t>();
         tensors_.push_back(std::move(tensor));
+        tensor_index_.try_emplace(
+            tensors_.back().name,
+            tensors_.size() - 1u);
     }
 
     data_offset_ = align_up(reader.position(), alignment_);
@@ -388,21 +394,21 @@ GgufFile::GgufFile(const std::filesystem::path& path)
 }
 
 const GgufValue* GgufFile::find_metadata(const std::string& key) const noexcept {
-    for (const auto& kv : metadata_) {
-        if (kv.key == key) {
-            return &kv.value;
-        }
+    const auto it =
+        metadata_index_.find(key);
+    if (it == metadata_index_.end()) {
+        return nullptr;
     }
-    return nullptr;
+    return &metadata_[it->second].value;
 }
 
 const GgufTensorInfo* GgufFile::find_tensor(const std::string& name) const noexcept {
-    for (const auto& tensor : tensors_) {
-        if (tensor.name == name) {
-            return &tensor;
-        }
+    const auto it =
+        tensor_index_.find(name);
+    if (it == tensor_index_.end()) {
+        return nullptr;
     }
-    return nullptr;
+    return &tensors_[it->second];
 }
 
 std::optional<std::string> GgufFile::metadata_string(const std::string& key) const {
