@@ -8,6 +8,7 @@ on:
 jobs:
   linux-lavapipe:
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
 
     steps:
       - uses: actions/checkout@v4
@@ -50,10 +51,18 @@ jobs:
           grep -q "Tokenizer tokens readable:" gguf-report.txt
           grep -q "Validation: OK" gguf-report.txt
 
-      - name: Upload GGUF report
+      - name: Generate text with Gemma on Lavapipe
+        run: |
+          ./build/vortexrt-gemma             --model gemma-3-270m-Q8_0.gguf             --prompt "The capital of France is"             --tokens 3 | tee generation-report.txt
+          grep -q "Generated continuation:" generation-report.txt
+          grep -q "Generation: OK" generation-report.txt
+
+      - name: Upload reports
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: gguf-report
-          path: gguf-report.txt
+          name: vortexrt-reports
+          path: |
+            gguf-report.txt
+            generation-report.txt
           if-no-files-found: ignore

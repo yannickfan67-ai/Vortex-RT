@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.24)
 
-project(VortexRT VERSION 0.2.0 LANGUAGES CXX)
+project(VortexRT VERSION 0.3.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -62,6 +62,7 @@ add_library(vortexrt STATIC
     src/compute_pipeline.cpp
     src/q8_matvec.cpp
     src/gguf.cpp
+    src/gemma3.cpp
 )
 
 target_include_directories(vortexrt
@@ -91,6 +92,10 @@ add_dependencies(vortexrt-q8-test vortexrt_shaders)
 
 add_executable(vortexrt-gguf-info src/gguf_main.cpp)
 target_link_libraries(vortexrt-gguf-info PRIVATE vortexrt)
+
+add_executable(vortexrt-gemma src/gemma_main.cpp)
+target_link_libraries(vortexrt-gemma PRIVATE vortexrt)
+add_dependencies(vortexrt-gemma vortexrt_shaders)
 
 include(CTest)
 if(BUILD_TESTING)
