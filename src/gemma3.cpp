@@ -77,7 +77,12 @@ Gemma3Model::Gemma3Model(
     const std::string& argmax_spirv,
     const std::string& q8_matvec_32_spirv,
     const std::string& q8_matvec_u8_32_spirv,
-    const std::string& gelu_mul_spirv)
+    const std::string& gelu_mul_spirv,
+    const std::string& q8_matvec_16_spirv,
+    const std::string& q8_matvec_u8_16_spirv,
+    const std::string& q8_matvec_8_spirv,
+    const std::string& q8_matvec_u8_8_spirv,
+    std::uint32_t q8_lane_override)
     : gguf_(gguf_path),
       context_(context),
       q8_pipeline_(
@@ -93,16 +98,61 @@ Gemma3Model::Gemma3Model(
     const auto subgroup_size =
         context_.capabilities().subgroup_size;
 
-    if (context_.capabilities().device_type !=
-            VK_PHYSICAL_DEVICE_TYPE_CPU &&
-        !q8_matvec_32_spirv.empty() &&
-        subgroup_size != 0 &&
-        subgroup_size <= 32u) {
-        q8_pipeline_32_ =
-            std::make_unique<Q8MatVecPipeline>(
-                context_,
-                q8_matvec_32_spirv,
-                q8_matvec_u8_32_spirv);
+    std::uint32_t selected_lanes =
+        q8_lane_override;
+
+    if (selected_lanes == 0) {
+        selected_lanes =
+            context_.capabilities().device_type !=
+                    VK_PHYSICAL_DEVICE_TYPE_CPU &&
+                subgroup_size != 0 &&
+                subgroup_size <= 32u
+                ? 32u
+                : 64u;
+    }
+
+    const auto make_narrow_pipeline =
+        [&](std::uint32_t lanes,
+            const std::string& spirv,
+            const std::string& u8_spirv) {
+            if (spirv.empty()) {
+                throw std::runtime_error(
+                    "Requested Q8 lane variant is unavailable");
+            }
+            q8_pipeline_narrow_ =
+                std::make_unique<Q8MatVecPipeline>(
+                    context_,
+                    spirv,
+                    u8_spirv);
+            narrow_q8_lane_count_ =
+                lanes;
+        };
+
+    switch (selected_lanes) {
+    case 64u:
+        narrow_q8_lane_count_ = 64u;
+        break;
+    case 32u:
+        make_narrow_pipeline(
+            32u,
+            q8_matvec_32_spirv,
+            q8_matvec_u8_32_spirv);
+        break;
+    case 16u:
+        make_narrow_pipeline(
+            16u,
+            q8_matvec_16_spirv,
+            q8_matvec_u8_16_spirv);
+        break;
+    case 8u:
+        make_narrow_pipeline(
+            8u,
+            q8_matvec_8_spirv,
+            q8_matvec_u8_8_spirv);
+        break;
+    default:
+        throw std::runtime_error(
+            "Q8 lane override must be 0, 8, 16, 32, or 64");
     }
 
     const auto architecture =
@@ -368,9 +418,9 @@ Q8MatVecPipeline& Gemma3Model::q8_pipeline_for(
     // smaller devices the 32-lane variant avoids wasting half
     // or more of a 64-lane workgroup.  The 2048-wide FFN down
     // projection keeps the 64-lane path.
-    if (q8_pipeline_32_ &&
+    if (q8_pipeline_narrow_ &&
         input_dim <= 1024u) {
-        return *q8_pipeline_32_;
+        return *q8_pipeline_narrow_;
     }
 
     return q8_pipeline_;
