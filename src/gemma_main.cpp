@@ -24,6 +24,8 @@ struct Options {
     std::uint32_t token_id = 2;
     std::size_t top_k = 8;
     std::size_t generate_tokens = 0;
+    std::string projection_fusion = "auto";
+    std::uint32_t q8_lanes = 0;
 };
 
 std::uint32_t parse_u32(
@@ -65,6 +67,8 @@ Options parse_options(int argc, char** argv) {
         throw std::runtime_error(
             "usage: vortexrt-gemma <model.gguf> "
             "[--token-id N] [--top-k N] [--generate N] "
+            "[--projection-fusion auto|on|off] "
+            "[--q8-lanes auto|8|16|32|64] "
             "[--device <index|name>]");
     }
 
@@ -104,6 +108,33 @@ Options parse_options(int argc, char** argv) {
                 throw std::runtime_error(
                     "--generate is capped at 128 during bring-up");
             }
+        } else if (arg == "--projection-fusion") {
+            options.projection_fusion =
+                next("--projection-fusion");
+            if (options.projection_fusion != "auto" &&
+                options.projection_fusion != "on" &&
+                options.projection_fusion != "off") {
+                throw std::runtime_error(
+                    "--projection-fusion must be auto, on, or off");
+            }
+        } else if (arg == "--q8-lanes") {
+            const auto lanes =
+                next("--q8-lanes");
+            if (lanes == "auto") {
+                options.q8_lanes = 0;
+            } else {
+                options.q8_lanes =
+                    parse_u32(
+                        lanes,
+                        "--q8-lanes");
+                if (options.q8_lanes != 8u &&
+                    options.q8_lanes != 16u &&
+                    options.q8_lanes != 32u &&
+                    options.q8_lanes != 64u) {
+                    throw std::runtime_error(
+                        "--q8-lanes must be auto, 8, 16, 32, or 64");
+                }
+            }
         } else if (arg == "--device") {
             options.device = next("--device");
         } else if (arg == "--help" ||
@@ -114,6 +145,10 @@ Options parse_options(int argc, char** argv) {
                 << "  --top-k N             display top logits; 0 skips LM head\n"
                 << "  --prompt TEXT         tokenize/prefill a text prompt before generation\n"
                 << "  --generate N          greedy-generate N tokens with KV cache\n"
+                << "  --projection-fusion auto|on|off\n"
+                << "                        override QKV/FFN projection fusion policy\n"
+                << "  --q8-lanes auto|8|16|32|64\n"
+                << "                        override narrow Q8 workgroup width\n"
                 << "  --device <index|name> Vulkan device selector\n";
             std::exit(0);
         } else {
@@ -173,7 +208,18 @@ int main(int argc, char** argv) {
             vortexrt::build_config::argmax_spv,
             vortexrt::build_config::q8_matvec_32_spv,
             vortexrt::build_config::q8_matvec_u8_32_spv,
-            vortexrt::build_config::gelu_mul_spv);
+            vortexrt::build_config::gelu_mul_spv,
+            vortexrt::build_config::q8_matvec_16_spv,
+            vortexrt::build_config::q8_matvec_u8_16_spv,
+            vortexrt::build_config::q8_matvec_8_spv,
+            vortexrt::build_config::q8_matvec_u8_8_spv,
+            options.q8_lanes);
+
+        if (options.projection_fusion == "on") {
+            model.set_projection_fusion_enabled(true);
+        } else if (options.projection_fusion == "off") {
+            model.set_projection_fusion_enabled(false);
+        }
 
         const auto model_ready =
             std::chrono::steady_clock::now();
