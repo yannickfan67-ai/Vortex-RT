@@ -50,6 +50,8 @@ jobs:
           ./build/vortexrt-info
           ./build/vortexrt-bench --elements 65536 --repetitions 2
           ./build/vortexrt-q8-test
+          ./build/vortexrt-gelu-test
+          ./build/vortexrt-ffn-test
           ctest --test-dir build --output-on-failure
 
       - name: Cache Gemma 3 270M Q8_0
