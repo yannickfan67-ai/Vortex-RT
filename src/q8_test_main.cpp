@@ -375,6 +375,57 @@ int main() {
             static_cast<std::uint32_t>(
                 matrix_bytes);
 
+        std::vector<float> staged_output_first(kOutput);
+        std::vector<float> staged_output_replay(kOutput);
+
+        pipeline.run_staged(
+            weights,
+            fused_input,
+            fused_output,
+            staging_input,
+            staging_output,
+            input.data(),
+            input.size() * sizeof(float),
+            staged_output_first.data(),
+            staged_output_first.size() * sizeof(float),
+            0,
+            kInput,
+            kOutput);
+
+        pipeline.run_staged(
+            weights,
+            fused_input,
+            fused_output,
+            staging_input,
+            staging_output,
+            input.data(),
+            input.size() * sizeof(float),
+            staged_output_replay.data(),
+            staged_output_replay.size() * sizeof(float),
+            0,
+            kInput,
+            kOutput);
+
+        float staged_max_error = 0.0f;
+        float staged_replay_error = 0.0f;
+
+        for (std::uint32_t row = 0;
+             row < kOutput;
+             ++row) {
+            staged_max_error =
+                std::max(
+                    staged_max_error,
+                    std::fabs(
+                        staged_output_first[row] -
+                        reference[row]));
+            staged_replay_error =
+                std::max(
+                    staged_replay_error,
+                    std::fabs(
+                        staged_output_replay[row] -
+                        staged_output_first[row]));
+        }
+
         std::vector<float> pair_output(
             2u * kOutput);
 
@@ -460,6 +511,14 @@ int main() {
         }
 
         std::cout
+            << "  staged max abs error: "
+            << staged_max_error
+            << "\n";
+        std::cout
+            << "  staged cached replay error: "
+            << staged_replay_error
+            << "\n";
+        std::cout
             << "  fused pair max abs error: "
             << pair_max_error
             << "\n";
@@ -468,7 +527,9 @@ int main() {
             << triplet_max_error
             << "\n";
 
-        if (pair_max_error > 2e-3f ||
+        if (staged_max_error > 2e-3f ||
+            staged_replay_error > 1e-6f ||
+            pair_max_error > 2e-3f ||
             triplet_max_error > 2e-3f) {
             throw std::runtime_error(
                 "Q8_0 fused Vulkan projection mismatch");
