@@ -97,8 +97,8 @@ jobs:
       - name: Run prompted Gemma 3 generation
         run: |
           ./build/vortexrt-gemma gemma-3-270m-Q8_0.gguf --prompt "Hello" --generate 2 | tee gemma-prompt-report.txt
-          grep -q "Prompt token ids:" gemma-prompt-report.txt
-          grep -q "Generated token ids:" gemma-prompt-report.txt
+          grep -q "Prompt token ids: 2 9259" gemma-prompt-report.txt
+          grep -q "Generated token ids: 236764 108" gemma-prompt-report.txt
           grep -q "TEXT_BEGIN" gemma-prompt-report.txt
           grep -q "Validation: OK" gemma-prompt-report.txt
 
