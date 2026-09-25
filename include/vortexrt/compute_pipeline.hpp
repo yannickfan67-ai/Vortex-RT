@@ -35,6 +35,12 @@ public:
         std::uint32_t repetitions = 1);
 
 private:
+    void cleanup() noexcept;
+    void update_descriptors(const std::vector<Buffer*>& buffers);
+    void record_commands(
+        std::uint32_t element_count,
+        std::uint32_t repetitions);
+
     VulkanContext& context_;
     std::uint32_t binding_count_ = 0;
     std::uint32_t local_size_x_ = 1;
@@ -50,6 +56,12 @@ private:
     VkCommandBuffer command_buffer_ = VK_NULL_HANDLE;
     VkFence fence_ = VK_NULL_HANDLE;
     VkQueryPool query_pool_ = VK_NULL_HANDLE;
+
+    std::vector<VkBuffer> bound_buffers_;
+    std::vector<VkDeviceSize> bound_sizes_;
+    std::uint32_t recorded_element_count_ = 0;
+    std::uint32_t recorded_repetitions_ = 0;
+    bool command_recording_valid_ = false;
 };
 
 } // namespace vortexrt
