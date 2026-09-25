@@ -59,6 +59,10 @@ public:
         return config_;
     }
 
+    [[nodiscard]] bool projection_fusion_enabled() const noexcept {
+        return fuse_projections_;
+    }
+
     [[nodiscard]] Gemma3SingleTokenResult run_single_token(
         std::uint32_t token_id,
         std::size_t top_k = 8);
@@ -146,6 +150,7 @@ private:
     Q8MatVecPipeline q8_pipeline_;
     std::unique_ptr<ArgmaxPipeline> argmax_pipeline_;
     Gemma3Config config_{};
+    bool fuse_projections_ = true;
 
     std::unordered_map<std::string, std::vector<float>> f32_weights_;
     std::unique_ptr<Buffer> weights_arena_;
