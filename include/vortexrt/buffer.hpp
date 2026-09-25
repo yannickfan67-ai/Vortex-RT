@@ -23,6 +23,12 @@ public:
 
     [[nodiscard]] VkBuffer handle() const noexcept { return buffer_; }
     [[nodiscard]] VkDeviceSize size() const noexcept { return size_; }
+    [[nodiscard]] bool host_visible() const noexcept {
+        return (memory_properties_ & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) != 0;
+    }
+    [[nodiscard]] bool host_coherent() const noexcept {
+        return (memory_properties_ & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) != 0;
+    }
 
     void upload(const void* data, std::size_t bytes, VkDeviceSize offset = 0);
     void download(void* data, std::size_t bytes, VkDeviceSize offset = 0) const;
