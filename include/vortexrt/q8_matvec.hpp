@@ -172,6 +172,7 @@ private:
     void clear_staged_command_cache() noexcept;
     void clear_pair_command_cache() noexcept;
     void clear_triplet_command_cache() noexcept;
+    void clear_ffn_command_cache() noexcept;
 
     VulkanContext& context_;
     bool using_native_u8_ = false;
